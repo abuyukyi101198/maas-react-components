@@ -41,9 +41,10 @@
   },
   "license": "AGPL-3.0",
   "scripts": {
-    "build": "tsc && vite build",
+    "build": "npm run build:grammar && tsc && vite build",
     "build:run": "npm run build",
     "build:watch": "tsc && vite build --watch",
+    "build:grammar": "peggy --format es --dts -o src/lib/components/QueryInput/maasql.gen.js src/lib/components/QueryInput/maasql.peggy",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --ext .ts,.tsx src && tsc --noEmit && stylelint src/**/*.scss",
     "lint:run": "npm run lint",
     "lint:fix": "ESLINT_USE_FLAT_CONFIG=false eslint --ext .ts,.tsx --fix src && stylelint src/**/*.scss --fix",
@@ -92,6 +93,7 @@
     "eslint-plugin-unused-imports": "^4.4.1",
     "jsdom": "^26.1.0",
     "msw": "^3.0.3",
+    "peggy": "^5.1.1",
     "plop": "^4.0.0",
     "prettier": "^3.9.10",
     "prop-types": "^15.8.1",
@@ -146,8 +148,5 @@
     "vitest": {
       "optional": true
     }
-  },
-  "dependencies": {
-    "peggy": "^5.1.1"
   }
 }
