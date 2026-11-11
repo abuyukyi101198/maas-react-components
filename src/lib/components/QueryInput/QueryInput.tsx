@@ -62,8 +62,7 @@ type SuggestionState = {
  * @param {disabled} [props.disabled] - Field disabling boolean
  * @param {search} [props.search] - Externally controlled search query string
  * @param {setSearch} [props.setSearch] - Search query string setter
- * @param {context} [props.context] - Externally controlled suggestion context
- * @param {setContext} [props.setContext] - Suggestion context setter
+ * @param {setContext} [props.setContext] - Setter for the dot-separated open filter path at the cursor
  * @param {setToken} [props.setToken] - Partial token string for autocomplete
  * @param {suggestions} [props.suggestions] - Context-aware suggestions
  * @param {isLoading} [props.isLoading] - Loading suggestion state boolean
@@ -75,7 +74,6 @@ type SuggestionState = {
  * <QueryInput
  *   search={search}
  *   setSearch={setSearch}
- *   context={context}
  *   setContext={setContext}
  *   setToken={setToken}
  *   suggestions={suggestions}
@@ -376,6 +374,9 @@ export const QueryInput = ({
           id="query-suggestions"
           role="listbox"
           aria-label="Search suggestions"
+          // Keep focus on the input so the post-selection refocus does not
+          // fire a focus event that reopens the list.
+          onMouseDown={(e) => e.preventDefault()}
         >
           {isLoading ? (
             <div className="p-query-input__loading">

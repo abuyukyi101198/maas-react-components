@@ -210,15 +210,6 @@ const meta: Meta<typeof QueryInput> = {
         required: true,
       },
     },
-    context: {
-      description:
-        "Externally controlled context string. Must be passed in to the component for context-aware suggestions",
-      control: false,
-      table: {
-        type: { summary: "string" },
-        required: true,
-      },
-    },
     setContext: {
       description: "State setter function for updating context string",
       control: false,
@@ -290,7 +281,6 @@ export const Default: Story = {
       <QueryInput
         search={search}
         setSearch={setSearch}
-        context={context}
         setContext={setContext}
         setToken={setToken}
         suggestions={suggestions}
@@ -306,7 +296,6 @@ export const Disabled: Story = {
         disabled
         search={""}
         setSearch={() => {}}
-        context={""}
         setContext={() => {}}
         setToken={() => {}}
         suggestions={[]}
@@ -318,7 +307,7 @@ export const Disabled: Story = {
 export const Loading: Story = {
   render: (args) => {
     const [search, setSearch] = useState<string>("");
-    const [context, setContext] = useState<string>("");
+    const [, setContext] = useState<string>("");
     const [_, setToken] = useState<string>("");
 
     return (
@@ -326,7 +315,6 @@ export const Loading: Story = {
         isLoading
         search={search}
         setSearch={setSearch}
-        context={context}
         setContext={setContext}
         setToken={setToken}
         suggestions={args.suggestions}

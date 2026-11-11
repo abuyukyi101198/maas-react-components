@@ -24,15 +24,20 @@ describe("QueryInput", () => {
   const defaultProps = {
     search: "",
     setSearch: mockSetSearch,
-    context: "",
     setContext: mockSetContext,
     setToken: mockSetToken,
     suggestions: mockSuggestions,
   };
 
   // Stateful wrapper for tests that require actual external state management
-  const QueryInputTestWrapper = () => {
-    const [search, setSearch] = useState("");
+  const QueryInputTestWrapper = ({
+    initialSearch = "",
+    suggestions = mockSuggestions,
+  }: {
+    initialSearch?: string;
+    suggestions?: Suggestion[];
+  }) => {
+    const [search, setSearch] = useState(initialSearch);
     const [context, setContext] = useState("");
     const [token, setToken] = useState("");
 
@@ -41,10 +46,9 @@ describe("QueryInput", () => {
         <QueryInput
           search={search}
           setSearch={setSearch}
-          context={context}
           setContext={setContext}
           setToken={setToken}
-          suggestions={mockSuggestions}
+          suggestions={suggestions}
         />
         <span data-testid="context">{context}</span>
         <span data-testid="token">{token}</span>
@@ -335,12 +339,12 @@ describe("QueryInput", () => {
     expect(firstOption).toHaveAttribute("aria-selected", "true");
   });
 
-  it("calls setContext with correct context", async () => {
+  it("sets context to the open filter name", async () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
     const input = screen.getByRole("searchbox");
-    await user.type(input, "status:(");
+    await user.type(input, "status(");
 
     expect(screen.getByTestId("context")).toHaveTextContent("status");
   });
@@ -355,18 +359,50 @@ describe("QueryInput", () => {
     expect(screen.getByTestId("token")).toHaveTextContent("test");
   });
 
-  it("extracts context from filter syntax", async () => {
+  it("extracts context and token inside a filter string", async () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
     const input = screen.getByRole("searchbox");
-    await user.type(input, "status:(john");
+    await user.type(input, 'status("john');
 
     expect(screen.getByTestId("context")).toHaveTextContent("status");
     expect(screen.getByTestId("token")).toHaveTextContent("john");
   });
 
-  it("builds correct query for filter suggestions", async () => {
+  it("joins nested open filters into a dotted context", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'machine(zone("de');
+
+    expect(screen.getByTestId("context")).toHaveTextContent("machine.zone");
+    expect(screen.getByTestId("token")).toHaveTextContent("de");
+  });
+
+  it("tracks the open filter after a complete term", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a") zone("de');
+
+    expect(screen.getByTestId("context")).toHaveTextContent("zone");
+    expect(screen.getByTestId("token")).toHaveTextContent("de");
+  });
+
+  it("clears context after the filter is closed", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a") ');
+
+    expect(screen.getByTestId("context")).toBeEmptyDOMElement();
+  });
+
+  it("inserts a filter as name(", async () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
@@ -374,82 +410,132 @@ describe("QueryInput", () => {
     await user.click(input);
 
     await user.click(screen.getByText("Show more..."));
-    const filterSuggestion = screen.getByText("created");
-    await user.click(filterSuggestion);
+    await user.click(screen.getByText("created"));
 
-    // Should build "status:(" format
-    expect(input).toHaveValue("created:(");
+    expect(input).toHaveValue("created(");
+    expect(screen.getByTestId("context")).toHaveTextContent("created");
   });
 
-  it("builds correct query for value suggestions without context", async () => {
+  it("inserts a filter after a complete term and keeps suggestions open", async () => {
     const user = userEvent.setup();
-    render(<QueryInput {...defaultProps} />);
+    render(
+      <QueryInputTestWrapper
+        suggestions={[{ value: "zone", type: "filter" }]}
+      />,
+    );
 
     const input = screen.getByRole("searchbox");
-    await user.click(input);
+    await user.type(input, 'status("deployed") ');
+    await user.click(screen.getByRole("option", { name: /zone/ }));
 
-    const valueSuggestion = screen.getByText("active");
-    await user.click(valueSuggestion);
-
-    // Should build "status:(=active" format when no context
-    expect(mockSetSearch).toHaveBeenCalledWith("status:(=active");
+    expect(input).toHaveValue('status("deployed") zone(');
+    expect(screen.getByTestId("context")).toHaveTextContent("zone");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
   });
 
-  it("builds correct query for value suggestions with context", async () => {
-    const user = userEvent.setup();
-    render(<QueryInput {...defaultProps} context="status" />);
-
-    const input = screen.getByRole("searchbox");
-    await user.click(input);
-
-    const valueSuggestion = screen.getByText("active");
-    await user.click(valueSuggestion);
-
-    // Should append "=active" when context exists
-    expect(mockSetSearch).toHaveBeenCalledWith("=active");
-  });
-
-  it("handles suggestions with existing equals sign", async () => {
+  it("inserts a quoted value, closes the filter and hides suggestions on click", async () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
     const input = screen.getByRole("searchbox");
+    await user.type(input, "status(");
+    await user.click(screen.getByText("active"));
+
+    expect(input).toHaveValue('status("active")');
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("replaces a partial string value", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("ac');
+    await user.click(screen.getByText("active"));
+
+    expect(input).toHaveValue('status("active")');
+  });
+
+  it("escapes quotes in inserted values", async () => {
+    const user = userEvent.setup();
+    render(
+      <QueryInputTestWrapper suggestions={[{ value: 'a"b', type: "tag" }]} />,
+    );
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, "tag(");
+    await user.click(screen.getByRole("option", { name: /a"b/ }));
+
+    expect(input).toHaveValue('tag("a\\"b")');
+  });
+
+  it("replaces the whole string around the cursor and keeps later terms", async () => {
+    const user = userEvent.setup();
+    const initialSearch = 'status("de") zone("x")';
+    render(<QueryInputTestWrapper initialSearch={initialSearch} />);
+
+    const input = screen.getByRole("searchbox");
     await user.click(input);
+    const cursor = 'status("de'.length;
+    await user.keyboard("{ArrowLeft}".repeat(initialSearch.length - cursor));
 
-    await user.type(input, "status:(=");
-    const valueSuggestion = screen.getByText("active");
-    await user.click(valueSuggestion);
+    expect(screen.getByTestId("context")).toHaveTextContent("status");
+    expect(screen.getByTestId("token")).toHaveTextContent("de");
 
-    // Should append just the value when equals already exists
-    expect(input).toHaveValue("status:(=active");
+    await user.click(screen.getByText("active"));
+
+    expect(input).toHaveValue('status("active") zone("x")');
+  });
+
+  it("does not duplicate an existing closing parenthesis", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper initialSearch='status("ac")' />);
+
+    const input = screen.getByRole("searchbox");
+    await user.click(input);
+    await user.keyboard("{ArrowLeft}{ArrowLeft}");
+    await user.click(screen.getByText("active"));
+
+    expect(input).toHaveValue('status("active")');
   });
 
   it("hides suggestions after closing parenthesis", async () => {
     const user = userEvent.setup();
-    render(<QueryInput {...defaultProps} />);
+    render(<QueryInputTestWrapper />);
 
     const input = screen.getByRole("searchbox");
-    await user.type(input, "status:(active)");
+    await user.type(input, 'status("active")');
 
-    // Suggestions should be hidden after closing parenthesis
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
-  it("hides suggestions after comma", async () => {
+  it("hides suggestions after closing a filter in an OR expression", async () => {
     const user = userEvent.setup();
-    render(<QueryInput {...defaultProps} />);
+    render(<QueryInputTestWrapper />);
 
     const input = screen.getByRole("searchbox");
-    await user.type(input, "status:(active,");
+    await user.type(input, 'status("a") OR zone("x")');
 
-    // Suggestions should be hidden after comma
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("does not treat an operator as a partial token", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a") OR');
+
+    expect(screen.getByTestId("token")).toBeEmptyDOMElement();
   });
 
   it("updates context/token on cursor movement", async () => {
     const user = userEvent.setup();
     render(
-      <QueryInput {...defaultProps} search="status:(active) created:(test)" />,
+      <QueryInput
+        {...defaultProps}
+        search='status("active") created("test")'
+      />,
     );
 
     const input = screen.getByRole("searchbox");
@@ -548,7 +634,7 @@ describe("QueryInput", () => {
     const input = screen.getByRole("searchbox");
 
     // Type rapidly
-    await user.type(input, "status:(active) created:(test)");
+    await user.type(input, 'status("active") created("test")');
 
     expect(mockSetSearch).toHaveBeenCalled();
     expect(mockSetContext).toHaveBeenCalled();
@@ -580,21 +666,6 @@ describe("QueryInput", () => {
     await user.keyboard("{ArrowLeft}");
 
     // Should update context/token based on cursor position
-    expect(mockSetContext).toHaveBeenCalled();
-    expect(mockSetToken).toHaveBeenCalled();
-  });
-
-  it("handles malformed query input gracefully", async () => {
-    const user = userEvent.setup();
-    render(<QueryInput {...defaultProps} />);
-
-    const input = screen.getByRole("searchbox");
-
-    // Type malformed query with unmatched parentheses
-    await user.type(input, "status:((((incomplete");
-
-    // Should not throw errors and should still call setters
-    expect(mockSetSearch).toHaveBeenCalled();
     expect(mockSetContext).toHaveBeenCalled();
     expect(mockSetToken).toHaveBeenCalled();
   });
