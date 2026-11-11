@@ -146,5 +146,8 @@
     "vitest": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "peggy": "^5.1.1"
   }
 }
