@@ -16,18 +16,14 @@ import { SearchBox, Spinner } from "@canonical/react-components";
 import classNames from "classnames";
 
 import "./QueryInput.scss";
+import {
+  analyzeQuery,
+  replaceQueryToken,
+} from "@/lib/components/QueryInput/queryAnalyzer";
 
 const SUGGESTION_LIMITS = {
   DEFAULT: 4,
   EXPANDED: 15,
-} as const;
-
-const SPECIAL_CHARS = {
-  OPEN_PAREN: "(",
-  CLOSE_PAREN: ")",
-  EQUALS: "=",
-  COLON: ":",
-  COMMA: ",",
 } as const;
 
 export type Suggestion = {
@@ -41,7 +37,6 @@ type QueryInputProps = {
   disabled?: boolean;
   search: string;
   setSearch: Dispatch<SetStateAction<string>>;
-  context: string;
   setContext: Dispatch<SetStateAction<string>>;
   setToken: Dispatch<SetStateAction<string>>;
   suggestions: Suggestion[];
@@ -49,83 +44,11 @@ type QueryInputProps = {
   placeholder?: string;
 } & DetailedHTMLProps<HTMLAttributes<HTMLDivElement>, HTMLDivElement>;
 
-type ParseResult = {
-  context: string;
-  token: string;
-  tokenStart: number;
-  tokenEnd: number;
-};
-
 type SuggestionState = {
   isVisible: boolean;
   highlightedIndex: number;
   showingMore: boolean;
   cursorPosition: number;
-};
-
-const parseQueryInput = (
-  input: string,
-  cursorPosition: number = input.length,
-): ParseResult => {
-  const context = extractContext(input, cursorPosition);
-  const { token, tokenStart, tokenEnd } = extractToken(input, cursorPosition);
-  return { context, token, tokenStart, tokenEnd };
-};
-
-const extractContext = (input: string, cursorPosition: number): string => {
-  let depth = 0;
-
-  for (let i = cursorPosition - 1; i >= 0; i--) {
-    const char = input[i];
-
-    if (char === SPECIAL_CHARS.CLOSE_PAREN) {
-      depth++;
-    } else if (char === SPECIAL_CHARS.OPEN_PAREN) {
-      if (depth === 0) {
-        const before = input.slice(0, i).trimEnd();
-        const match = before.match(/([a-zA-Z0-9_-]+)\s*:\s*$/);
-        return match?.[1] || "";
-      }
-      depth--;
-    }
-  }
-
-  return "";
-};
-
-const extractToken = (
-  input: string,
-  cursorPosition: number,
-): {
-  token: string;
-  tokenStart: number;
-  tokenEnd: number;
-} => {
-  let start = cursorPosition;
-  let end = cursorPosition;
-
-  while (end < input.length && /[^\s=(),]/.test(input[end])) {
-    end++;
-  }
-
-  while (start > 0 && /[^\s=(),]/.test(input[start - 1])) {
-    start--;
-  }
-
-  const token = input.slice(start, end);
-  return { token, tokenStart: start, tokenEnd: end };
-};
-
-const shouldHideSuggestions = (
-  input: string,
-  cursorPosition: number,
-): boolean => {
-  const charAtCursor = input.charAt(cursorPosition - 1);
-  return (
-    cursorPosition > 0 &&
-    (charAtCursor === SPECIAL_CHARS.CLOSE_PAREN ||
-      charAtCursor === SPECIAL_CHARS.COMMA)
-  );
 };
 
 /**
@@ -163,7 +86,6 @@ export const QueryInput = ({
   disabled = false,
   search,
   setSearch,
-  context,
   setContext,
   setToken,
   suggestions,
@@ -222,39 +144,6 @@ export const QueryInput = ({
     [updateSuggestionState],
   );
 
-  const buildNewSearchValue = useCallback(
-    (selected: Suggestion, parseResult: ParseResult): string => {
-      const { tokenStart, tokenEnd } = parseResult;
-
-      if (selected.type === "filter") {
-        const replacement =
-          selected.value + SPECIAL_CHARS.COLON + SPECIAL_CHARS.OPEN_PAREN;
-        return (
-          search.slice(0, tokenStart) + replacement + search.slice(tokenEnd)
-        );
-      }
-
-      if (context.length === 0) {
-        const replacement =
-          selected.type +
-          SPECIAL_CHARS.COLON +
-          SPECIAL_CHARS.OPEN_PAREN +
-          SPECIAL_CHARS.EQUALS +
-          selected.value;
-        return (
-          search.slice(0, tokenStart) + replacement + search.slice(tokenEnd)
-        );
-      }
-
-      const replacement =
-        search.charAt(tokenStart - 1) === SPECIAL_CHARS.EQUALS
-          ? selected.value
-          : SPECIAL_CHARS.EQUALS + selected.value;
-      return search.slice(0, tokenStart) + replacement + search.slice(tokenEnd);
-    },
-    [search, context],
-  );
-
   const selectSuggestion = useCallback(
     (index: number) => {
       const selected = visibleSuggestions[index];
@@ -265,20 +154,14 @@ export const QueryInput = ({
         return;
       }
 
-      const parseResult = parseQueryInput(
+      const analysis = analyzeQuery(search, suggestionState.cursorPosition);
+      const { value: newValue, cursor: newCursorPosition } = replaceQueryToken(
         search,
-        suggestionState.cursorPosition,
+        analysis,
+        selected,
       );
-      const newValue = buildNewSearchValue(selected, parseResult);
-      const newCursorPosition =
-        parseResult.tokenStart +
-        (selected.type === "filter"
-          ? selected.value.length + 2
-          : context.length === 0
-            ? selected.type.length + selected.value.length + 3
-            : selected.value.length + 1);
 
-      const { context: newContext, token: newToken } = parseQueryInput(
+      const { context: newContext, token: newToken } = analyzeQuery(
         newValue,
         newCursorPosition,
       );
@@ -306,10 +189,8 @@ export const QueryInput = ({
     },
     [
       visibleSuggestions,
-      buildNewSearchValue,
       search,
       suggestionState.cursorPosition,
-      context,
       setContext,
       setToken,
       setSearch,
@@ -321,17 +202,14 @@ export const QueryInput = ({
     if (!inputRef.current) return;
 
     const cursorPosition = inputRef.current.selectionStart || 0;
-    const { context: newContext, token: newToken } = parseQueryInput(
-      search,
-      cursorPosition,
-    );
+    const analysis = analyzeQuery(search, cursorPosition);
 
-    setContext(newContext);
-    setToken(newToken);
+    setContext(analysis.context);
+    setToken(analysis.token);
 
     updateSuggestionState((prev) => ({
       ...prev,
-      isVisible: !shouldHideSuggestions(search, cursorPosition),
+      isVisible: !analysis.shouldHideSuggestions,
       cursorPosition,
     }));
   }, [search, setContext, setToken, updateSuggestionState]);
@@ -425,18 +303,15 @@ export const QueryInput = ({
   const handleChange = useCallback(
     (value: string) => {
       const cursorPosition = inputRef.current?.selectionStart || value.length;
-      const { context: newContext, token: newToken } = parseQueryInput(
-        value,
-        cursorPosition,
-      );
+      const analysis = analyzeQuery(value, cursorPosition);
 
-      setContext(newContext);
-      setToken(newToken);
+      setContext(analysis.context);
+      setToken(analysis.token);
       setSearch(value);
 
       updateSuggestionState({
         highlightedIndex: 0,
-        isVisible: !shouldHideSuggestions(value, cursorPosition),
+        isVisible: !analysis.shouldHideSuggestions,
         showingMore: false,
         cursorPosition,
       });
@@ -529,7 +404,7 @@ export const QueryInput = ({
                     {item.value}
                   </span>
                   {item.type === "filter" && (
-                    <span className="u-text--muted">:()</span>
+                    <span className="u-text--muted">()</span>
                   )}
                 </span>
                 {item.type !== "more" && (
