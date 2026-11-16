@@ -11,6 +11,21 @@
       expression,
     );
   }
+
+  // Reports which kinds of term a filter's content holds
+  function contentScope(expression) {
+    const kinds = new Set();
+    const visit = (node) => {
+      if (node.type === "filter") kinds.add("properties");
+      else if (node.type === "comparison") kinds.add("value");
+      else if (node.operands) node.operands.forEach(visit);
+      else if (node.operand) visit(node.operand);
+      else if (node.expression) visit(node.expression);
+    };
+    visit(expression);
+    if (kinds.size === 2) return "mixed";
+    return kinds.has("properties") ? "properties" : "value";
+  }
 }
 
 Query
@@ -56,73 +71,42 @@ Group
       return { type: "group", expression };
     }
 
-// Value scope constrains one value; property scope constrains one object/item.
-// Separate occurrences of a collection filter may match different items.
+// Filter content mixes value terms and nested filters, joined by AND/OR. The
+// scope reports which kinds of term appear.
 Filter
   = name:Identifier "(" Spacing content:FilterContent Spacing ")" {
       return { type: "filter", name: name.toLowerCase(), ...content };
     }
 
 FilterContent
-  = expression:PropertyOrExpression {
-      return { scope: "properties", expression };
-    }
-  / expression:ValueOrExpression {
-      return { scope: "value", expression };
+  = expression:ContentOrExpression {
+      return { scope: contentScope(expression), expression };
     }
 
-PropertyOrExpression
-  = head:PropertyAndExpression tail:(
+ContentOrExpression
+  = head:ContentAndExpression tail:(
       Whitespace "OR"i !IdentifierCharacter Whitespace
-      right:PropertyAndExpression { return right; }
+      right:ContentAndExpression { return right; }
     )* {
       return combine("or", head, tail);
     }
 
-PropertyAndExpression
-  = head:PropertyUnaryExpression tail:(
+ContentAndExpression
+  = head:ContentUnaryExpression tail:(
       Whitespace "AND"i !IdentifierCharacter Whitespace
-      right:PropertyUnaryExpression { return right; }
+      right:ContentUnaryExpression { return right; }
     )* {
       return combine("and", head, tail);
     }
 
-PropertyUnaryExpression
-  = operators:NegationOperator* expression:PropertyPrimary {
+ContentUnaryExpression
+  = operators:NegationOperator* expression:ContentPrimary {
       return negate(operators, expression);
     }
 
-PropertyPrimary
+ContentPrimary
   = Filter
-  / "(" Spacing expression:PropertyOrExpression Spacing ")" {
-      return { type: "group", expression };
-    }
-
-ValueOrExpression
-  = head:ValueAndExpression tail:(
-      Whitespace "OR"i !IdentifierCharacter Whitespace
-      right:ValueAndExpression { return right; }
-    )* {
-      return combine("or", head, tail);
-    }
-
-ValueAndExpression
-  = head:ValueUnaryExpression tail:(
-      Whitespace "AND"i !IdentifierCharacter Whitespace
-      right:ValueUnaryExpression {
-        return right;
-      }
-    )* {
-      return combine("and", head, tail);
-    }
-
-ValueUnaryExpression
-  = operators:NegationOperator* expression:ValuePrimary {
-      return negate(operators, expression);
-    }
-
-ValuePrimary
-  = "(" Spacing expression:ValueOrExpression Spacing ")" {
+  / "(" Spacing expression:ContentOrExpression Spacing ")" {
       return { type: "group", expression };
     }
   / ValueComparison
