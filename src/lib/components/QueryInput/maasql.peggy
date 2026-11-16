@@ -32,7 +32,8 @@ OrExpression
 
 AndExpression
   = head:UnaryExpression tail:(
-      Whitespace right:UnaryExpression { return right; }
+      Whitespace "AND"i !IdentifierCharacter Whitespace
+      right:UnaryExpression { return right; }
     )* {
       return combine("and", head, tail);
     }
@@ -80,7 +81,8 @@ PropertyOrExpression
 
 PropertyAndExpression
   = head:PropertyUnaryExpression tail:(
-      Whitespace right:PropertyUnaryExpression { return right; }
+      Whitespace "AND"i !IdentifierCharacter Whitespace
+      right:PropertyUnaryExpression { return right; }
     )* {
       return combine("and", head, tail);
     }
