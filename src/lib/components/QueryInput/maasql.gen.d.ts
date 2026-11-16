@@ -54,13 +54,9 @@ export interface LiteralExpectation {
 /**
  * Range of characters, like `a-z`
  */
-export type ClassRange = [
-  start: string,
-  end: string,
-]
+export type ClassRange = [start: string, end: string];
 
-export interface ClassParts extends Array<string | ClassRange> {
-}
+export interface ClassParts extends Array<string | ClassRange> {}
 
 /**
  * Expected a class, such as `[^acd-gz]i`
@@ -123,7 +119,10 @@ export declare class SyntaxError extends globalThis.SyntaxError {
    * @param found Any text that will appear as found in the input instead of
    *   expected
    */
-  static buildMessage(expected: Expectation[], found?: string | null | undefined): string;
+  static buildMessage(
+    expected: Expectation[],
+    found?: string | null | undefined,
+  ): string;
   readonly expected: Expectation[];
   readonly found: string | null | undefined;
   readonly location: LocationRange;
@@ -150,21 +149,21 @@ export interface ParserTracer {
   trace: (event: ParserTracerEvent) => void;
 }
 
-export type ParserTracerEvent
-  = {
+export type ParserTracerEvent =
+  | {
       readonly type: "rule.enter";
       readonly rule: string;
-      readonly location: LocationRange
+      readonly location: LocationRange;
     }
   | {
       readonly type: "rule.fail";
       readonly rule: string;
-      readonly location: LocationRange
+      readonly location: LocationRange;
     }
   | {
       readonly type: "rule.match";
       readonly rule: string;
-      readonly location: LocationRange
+      readonly location: LocationRange;
       /** Return value from the rule. */
       readonly result: unknown;
     };

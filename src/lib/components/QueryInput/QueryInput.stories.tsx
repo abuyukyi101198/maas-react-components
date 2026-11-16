@@ -1,8 +1,13 @@
-import { useState } from "react";
+import { type CSSProperties, useState } from "react";
 
 import { Meta, StoryObj } from "@storybook/react-vite";
 
 import { QueryInput, Suggestion } from "@/lib";
+import {
+  analyzeQuery,
+  type QueryTokenKind,
+  tokenizeQuery,
+} from "@/lib/components/QueryInput/queryAnalyzer";
 
 const mockSuggestionData: Suggestion[] = [
   {
@@ -257,6 +262,35 @@ export default meta;
 
 type Story = StoryObj<typeof QueryInput>;
 
+const TOKEN_STYLES: Record<QueryTokenKind, CSSProperties> = {
+  filter: { backgroundColor: "var(--vf-color-background-neutral-active)" },
+  operator: {
+    backgroundColor: "var(--vf-color-background-information-default)",
+    fontWeight: 600,
+  },
+  value: { backgroundColor: "var(--vf-color-background-positive-default)" },
+  fuzzy: { color: "var(--vf-color-text-muted)", fontStyle: "italic" },
+  text: {},
+};
+
+// A query as text, with each token kind colored
+const ParsedQuery = ({ label, query }: { label: string; query: string }) => (
+  <div>
+    <p className="u-text--muted">{label}</p>
+    <pre style={{ whiteSpace: "pre-wrap" }}>
+      {query === "" ? (
+        <span className="u-text--muted">(empty)</span>
+      ) : (
+        tokenizeQuery(query).map((token, index) => (
+          <span key={index} style={TOKEN_STYLES[token.kind]}>
+            {token.text}
+          </span>
+        ))
+      )}
+    </pre>
+  </div>
+);
+
 export const Default: Story = {
   render: (args) => {
     const [search, setSearch] = useState<string>("");
@@ -278,13 +312,31 @@ export const Default: Story = {
     }
 
     return (
-      <QueryInput
-        search={search}
-        setSearch={setSearch}
-        setContext={setContext}
-        setToken={setToken}
-        suggestions={suggestions}
-      />
+      <div
+        style={{ display: "flex", flexDirection: "column", minHeight: "40rem" }}
+      >
+        <QueryInput
+          search={search}
+          setSearch={setSearch}
+          setContext={setContext}
+          setToken={setToken}
+          suggestions={suggestions}
+        />
+        <div
+          style={{
+            marginTop: "auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1rem",
+          }}
+        >
+          <ParsedQuery label="Raw query" query={search} />
+          <ParsedQuery
+            label="Valid query"
+            query={analyzeQuery(search).completeQuery}
+          />
+        </div>
+      </div>
     );
   },
 };

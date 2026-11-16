@@ -19,6 +19,7 @@ export type QueryAnalysis = {
   isTokenInChain: boolean; /** The token starts after an enclosed token, so operators are the expected continuation */
   operators: string[]; /** Operators the grammar accepts at the cursor, matching the partially typed operator */
   acceptsTerm: boolean; /** A value or filter term may be inserted at the token without an operator */
+  overwritesUnit: boolean; /** An insertion here would rewrite an operator word or a filter's name, "(" or ")" */
 };
 
 type Frame = {
@@ -104,6 +105,16 @@ const parseQuery = (query: string): unknown | null => {
   }
 };
 
+// Spans an insertion must not rewrite: an operator word, a filter's name with
+// its "(", and a closed filter's ")". A filter's value stays editable
+const protectedSpans = (unit: QueryUnit): [number, number][] => {
+  if (unit.kind === "operator") return [[unit.start, unit.end]];
+  const opener: [number, number] = [unit.start, unit.anchors[0]];
+  return unit.anchors.length === 2
+    ? [opener, [unit.end - 1, unit.end]]
+    : [opener];
+};
+
 export const analyzeQuery = (
   input: string,
   cursorPosition: number = input.length,
@@ -116,6 +127,8 @@ export const analyzeQuery = (
   // isInChain as it was before the word currently being typed started
   let isInChainBeforeWord = false;
   let [stringStart, wordStart, lastTopWordStart]: number[] = [-1, -1, -1];
+  // Index of the first top-level ")" with nothing open to close, or -1
+  let strayCloser = -1;
 
   for (let i = 0; i < inputUntilCursor.length; i++) {
     const currentChar = inputUntilCursor[i];
@@ -166,6 +179,7 @@ export const analyzeQuery = (
       // Can chain another item since the previous one is complete
       isInChain = true;
       // No longer tracking context
+      if (stack.length === 0 && strayCloser < 0) strayCloser = i;
       stack.pop();
       // No longer tracking word
       wordStart = -1;
@@ -195,6 +209,9 @@ export const analyzeQuery = (
 
   let tokenStart = cursor;
   let tokenEnd = cursor;
+  // The input after the caret that a replacement overwrites, up to the token's
+  // end before an operator word is excluded from the token
+  let overwriteEnd = cursor;
   // The cursor is on a whole NOT/OR/AND word, which the token excludes
   let isInOperatorWord = false;
   // If current token is in string
@@ -212,6 +229,7 @@ export const analyzeQuery = (
         break;
       }
     }
+    overwriteEnd = tokenEnd;
   }
   // If not a string block
   else {
@@ -225,6 +243,7 @@ export const analyzeQuery = (
     while (tokenEnd < input.length && !TOKEN_BOUNDARY.test(input[tokenEnd])) {
       tokenEnd++;
     }
+    overwriteEnd = tokenEnd;
 
     // Exclude whole operators without consuming any part of them.
     isInOperatorWord = OPERATOR.test(input.slice(tokenStart, tokenEnd));
@@ -258,9 +277,12 @@ export const analyzeQuery = (
   else {
     trimAt = inputUntilCursor.length;
   }
+  // A stray closer cannot be part of any valid query, so the trim stops at it
+  if (strayCloser >= 0 && strayCloser < trimAt) trimAt = strayCloser;
 
-  // Query is the complete input if parseable,
-  // otherwise until the trim (which is guaranteed parseability)
+  // Query is the complete input if parseable, otherwise the prefix before the
+  // trim, which parses once open filters, strings, dangling words, and stray
+  // closers are cut from it
   const fullAst = parseQuery(input);
   const completeQuery =
     fullAst !== null
@@ -271,6 +293,14 @@ export const analyzeQuery = (
   const prevChar = inputUntilCursor[cursor - 1];
   const shouldHideSuggestions =
     !isInString && cursor > 0 && (prevChar === ")" || prevChar === '"');
+
+  // An insertion over an operator word or a filter's name, "(" or ")" would
+  // rewrite that unit, so suggestions are withheld there
+  const overwritesUnit = segmentQuery(input).units.some((unit) =>
+    protectedSpans(unit).some(
+      ([start, end]) => tokenStart < end && start < overwriteEnd,
+    ),
+  );
 
   // A word being typed has already reset isInChain, so use the chain state
   // from where that word starts (the token may exclude a whole operator word)
@@ -334,6 +364,7 @@ export const analyzeQuery = (
     isTokenInChain,
     operators,
     acceptsTerm,
+    overwritesUnit,
   } as QueryAnalysis;
 };
 
@@ -359,10 +390,10 @@ export const replaceQueryToken = (
   }
 
   if (selected.type === "filter") {
-    const replacement = `${selected.value}(`;
+    const replacement = `${selected.value}()`;
     return {
       value: input.slice(0, tokenStart) + replacement + input.slice(tokenEnd),
-      cursor: tokenStart + replacement.length,
+      cursor: tokenStart + selected.value.length + 1,
     };
   }
 
@@ -381,4 +412,178 @@ export const replaceQueryToken = (
       input.slice(tokenEnd),
     cursor: tokenStart + opening.length + value.length,
   };
+};
+
+export type QueryTokenKind = "filter" | "operator" | "value" | "fuzzy" | "text";
+
+export type QueryToken = { text: string; kind: QueryTokenKind };
+
+// Whole operator phrases only; the lookahead keeps "ANDROID" a plain word
+const OPERATOR_PHRASE =
+  /^(?:NOT|AND|OR|CONTAINS|STARTS WITH|ENDS WITH|ABOVE|BELOW|AT LEAST|AT MOST)(?=[\s()"]|$)/i;
+
+// Splits the input into highlightable tokens. The texts concatenate back to
+// the exact input, so a layer drawn behind the text lines up with it.
+export const tokenizeQuery = (input: string): QueryToken[] => {
+  const tokens: QueryToken[] = [];
+  // One entry per open parenthesis: whether it opens a filter
+  const openGroups: boolean[] = [];
+  let index = 0;
+
+  while (index < input.length) {
+    const char = input[index];
+    const previous = tokens[tokens.length - 1];
+    let end = index + 1;
+    let kind: QueryTokenKind = "text";
+
+    if (char === "(") {
+      openGroups.push(previous?.kind === "filter");
+    } else if (char === ")") {
+      openGroups.pop();
+    } else if (WHITESPACE.test(char)) {
+      while (end < input.length && WHITESPACE.test(input[end])) end++;
+    } else if (char === '"') {
+      while (end < input.length && input[end] !== '"') {
+        end += input[end] === "\\" ? 2 : 1;
+      }
+      end = Math.min(end + 1, input.length);
+      kind = openGroups.includes(true) ? "value" : "fuzzy";
+    } else {
+      const operator = input.slice(index).match(OPERATOR_PHRASE);
+      if (operator) {
+        end = index + operator[0].length;
+        kind = "operator";
+      } else {
+        while (end < input.length && !TOKEN_BOUNDARY.test(input[end])) end++;
+        if (input[end] === "(") kind = "filter";
+        else if (openGroups.includes(true)) kind = "value";
+      }
+    }
+
+    tokens.push({ text: input.slice(index, end), kind });
+    index = end;
+  }
+
+  return tokens;
+};
+
+export type QuerySegment = {
+  text: string;
+  role: "text" | "value" | "fuzzy" | "operator" | "filter" | "filter-close";
+  /** Index into `units` for chips; null for plain text */
+  unit: number | null;
+};
+
+export type QueryUnit = {
+  kind: "operator" | "filter";
+  start: number;
+  /** Exclusive; deleting a unit removes everything from start to end */
+  end: number;
+  /** Caret offsets where a Backspace targets this unit */
+  anchors: number[];
+};
+
+// Operators are atomic: a Left or Right step into one jumps to its far edge.
+// A filter is exited from its inner edges: Right before its ")" and Left after
+// its "(". Elsewhere a filter's value is plain text the caret moves through.
+// Returns null when the step stays in plain text.
+export const stepOverUnit = (
+  units: QueryUnit[],
+  cursor: number,
+  direction: "left" | "right",
+): number | null => {
+  for (const unit of units) {
+    if (unit.kind === "operator") {
+      if (direction === "right" && unit.start <= cursor && cursor < unit.end)
+        return unit.end;
+      if (direction === "left" && unit.start < cursor && cursor <= unit.end)
+        return unit.start;
+    } else if (direction === "right") {
+      // A closed filter's ")" is the last character of its unit
+      const closed = unit.anchors.length === 2;
+      if (closed && cursor === unit.end - 1) return unit.end;
+    } else if (cursor === unit.anchors[0]) {
+      return unit.start;
+    }
+  }
+  return null;
+};
+
+// Chips are drawn from the tokens: a filter's name and "(" form one opener
+// chip, and its ")" closes the same unit. An unclosed opener runs to the end
+// of the input. Grouping parentheses stay plain text.
+export const segmentQuery = (
+  input: string,
+): { segments: QuerySegment[]; units: QueryUnit[] } => {
+  const tokens = tokenizeQuery(input);
+  const starts: number[] = [];
+  let offset = 0;
+  for (const token of tokens) {
+    starts.push(offset);
+    offset += token.text.length;
+  }
+
+  // Maps each opening parenthesis to the index of its closing one
+  const closerOf = new Map<number, number>();
+  const openers: number[] = [];
+  tokens.forEach((token, index) => {
+    if (token.kind !== "text") return;
+    if (token.text === "(") openers.push(index);
+    else if (token.text === ")") {
+      const opener = openers.pop();
+      if (opener !== undefined) closerOf.set(opener, index);
+    }
+  });
+
+  const units: QueryUnit[] = [];
+  const segments: QuerySegment[] = [];
+  // Maps a filter's closing parenthesis to its unit
+  const closes = new Map<number, number>();
+
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    const start = starts[index];
+    const end = start + token.text.length;
+    const closeUnit = closes.get(index);
+
+    if (closeUnit !== undefined) {
+      segments.push({
+        text: token.text,
+        role: "filter-close",
+        unit: closeUnit,
+      });
+    } else if (token.kind === "operator") {
+      units.push({ kind: "operator", start, end, anchors: [end] });
+      segments.push({
+        text: token.text,
+        role: "operator",
+        unit: units.length - 1,
+      });
+    } else if (token.kind === "filter" && tokens[index + 1]?.text === "(") {
+      const opener = index + 1;
+      const openEnd = starts[opener] + 1;
+      const closer = closerOf.get(opener);
+      const unitEnd = closer === undefined ? input.length : starts[closer] + 1;
+      units.push({
+        kind: "filter",
+        start,
+        end: unitEnd,
+        anchors: closer === undefined ? [openEnd] : [openEnd, unitEnd],
+      });
+      const unit = units.length - 1;
+      if (closer !== undefined) closes.set(closer, unit);
+      segments.push({
+        text: input.slice(start, openEnd),
+        role: "filter",
+        unit,
+      });
+      index = opener;
+    } else {
+      const role =
+        token.kind === "value" || token.kind === "fuzzy" ? token.kind : "text";
+      segments.push({ text: token.text, role, unit: null });
+    }
+  }
+
+  return { segments, units };
 };

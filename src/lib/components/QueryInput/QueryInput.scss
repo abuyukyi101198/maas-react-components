@@ -4,6 +4,129 @@
 
 .p-query-input {
   position: relative;
+  font-family: unquote($font-base-family);
+
+  .p-query-input__field {
+    color: $colors--theme--text-default;
+    flex-grow: 1;
+    font-size: 1rem;
+    line-height: map-get($settings-text-default, line-height);
+    min-height: map-get($settings-text-default, line-height);
+    min-width: 0;
+    outline: none;
+    overflow-wrap: anywhere;
+    padding: $input-vertical-padding $sph--large;
+    white-space: pre-wrap;
+
+    &[aria-disabled="true"] {
+      color: $colors--theme--text-inactive;
+    }
+
+    &[data-empty="true"]::before {
+      content: attr(data-placeholder);
+      color: $colors--theme--text-muted;
+    }
+  }
+
+  // The field and its action buttons share one bar, so the buttons stay in
+  // place when the suggestion list opens
+  .p-query-input__bar {
+    display: flex;
+    position: relative;
+    align-items: center;
+    background-color: $colors--theme--background-inputs;
+    border-bottom: $input-border-thickness solid
+      $colors--theme--border-high-contrast;
+    margin-bottom: $input-margin-bottom;
+
+    &:focus-within {
+      outline: $input-border-thickness solid $colors--theme--focus;
+    }
+  }
+
+  .p-query-input__actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: $sph--x-small;
+    padding-right: $sph--large;
+  }
+
+  .p-query-input__token--fuzzy {
+    color: $colors--theme--text-muted;
+  }
+
+  // Chips use Vanilla's p-chip pattern; these rules add the editor's kinds
+  .p-query-input__chip {
+    font-family: unquote($font-monospace);
+    user-select: none;
+  }
+
+  // An empty closer chip still needs a line box to match the others
+  .p-query-input__chip--filter-close .p-chip__value:empty::before {
+    content: "\200b";
+  }
+
+  // Operators: blue background and blue text
+  .p-query-input__chip--operator {
+    background-color: $colors--theme--background-information-default;
+    color: $color-information;
+
+    .p-chip__value {
+      color: $color-information;
+    }
+  }
+
+  // Filters: a muted pill whose inner edge is concave, like a parenthesis.
+  // The opener is the name's pill; the closer is the empty pill after the value
+  .p-query-input__chip--filter,
+  .p-query-input__chip--filter-close {
+    background-color: $colors--theme--background-neutral-active;
+  }
+
+  .p-query-input__chip--filter {
+    border-radius: 999px 0 0 999px;
+    mask-image: radial-gradient(
+      circle at calc(100% + 14px) 50%,
+      transparent 19.5px,
+      #000 20.5px
+    );
+  }
+
+  .p-query-input__chip--filter-close {
+    border-radius: 0 999px 999px 0;
+    mask-image: radial-gradient(
+      circle at -14px 50%,
+      transparent 19.5px,
+      #000 20.5px
+    );
+  }
+
+  // Suggestions are single pills; the concave edge marks an insertion only
+  .p-query-input__chip--pill {
+    border-radius: 999px;
+    mask-image: none;
+  }
+
+  // The parenthesis stays in the query text but is not drawn
+  .p-query-input__paren {
+    display: inline-block;
+    overflow: hidden;
+    width: 0;
+  }
+
+  // A unit is ringed when the selection touches it or Backspace highlights it.
+  // The wrapper is a flex row, so its box is the chips' full height and width
+  // and the ring follows the same shape as the chips' background
+  .p-query-input__unit {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+  }
+
+  .p-query-input__unit.is-selected {
+    outline: $input-border-thickness solid Highlight;
+    outline-offset: 2px;
+  }
 
   .p-query-input__list {
     position: absolute;

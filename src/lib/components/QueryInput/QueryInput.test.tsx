@@ -1,10 +1,37 @@
 import { useState } from "react";
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import { QueryInput, type Suggestion } from "@/lib/components/QueryInput";
+
+// jsdom does not move a contenteditable caret on arrow keys or End, so place it
+// at a character offset the way a click would
+const placeCaret = (root: HTMLElement, offset: number) => {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let remaining = offset;
+  for (
+    let node = walker.nextNode() as Text | null;
+    node;
+    node = walker.nextNode() as Text | null
+  ) {
+    if (node.parentElement?.closest("[data-chip]")) {
+      remaining -= node.length;
+      continue;
+    }
+    if (remaining <= node.length) {
+      const range = document.createRange();
+      range.setStart(node, remaining);
+      range.collapse(true);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      return;
+    }
+    remaining -= node.length;
+  }
+};
 
 describe("QueryInput", () => {
   // Mock functions for props
@@ -70,14 +97,16 @@ describe("QueryInput", () => {
   it("shows placeholder text", () => {
     render(<QueryInput {...defaultProps} placeholder="Search items..." />);
 
-    expect(screen.getByPlaceholderText("Search items...")).toBeInTheDocument();
+    expect(
+      screen.getByRole("searchbox", { name: "Search items..." }),
+    ).toBeInTheDocument();
   });
 
   it("handles disabled state", () => {
     render(<QueryInput {...defaultProps} disabled />);
 
     const input = screen.getByRole("searchbox");
-    expect(input).toBeDisabled();
+    expect(input).toHaveAttribute("contenteditable", "false");
     expect(input).toHaveAttribute("aria-disabled", "true");
   });
 
@@ -88,14 +117,14 @@ describe("QueryInput", () => {
     const input = screen.getByRole("searchbox");
     await user.type(input, "test query");
 
-    expect(input).toHaveValue("test query");
+    expect(input.textContent).toBe("test query");
   });
 
   it("displays current search value", () => {
     render(<QueryInput {...defaultProps} search="current search" />);
 
     const input = screen.getByRole("searchbox");
-    expect(input).toHaveValue("current search");
+    expect(input.textContent).toBe("current search");
   });
 
   it("shows suggestions when focused and suggestions exist", async () => {
@@ -405,7 +434,7 @@ describe("QueryInput", () => {
     expect(screen.getByTestId("context")).toBeEmptyDOMElement();
   });
 
-  it("inserts a filter as name(", async () => {
+  it("inserts a filter as name() with the caret inside", async () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
@@ -415,7 +444,7 @@ describe("QueryInput", () => {
     await user.click(screen.getByText("Show more..."));
     await user.click(screen.getByText("created"));
 
-    expect(input).toHaveValue("created(");
+    expect(input.textContent).toBe("created()");
     expect(screen.getByTestId("context")).toHaveTextContent("created");
   });
 
@@ -431,7 +460,7 @@ describe("QueryInput", () => {
     await user.type(input, 'status("deployed") AND ');
     await user.click(screen.getByRole("option", { name: /zone/ }));
 
-    expect(input).toHaveValue('status("deployed") AND zone(');
+    expect(input.textContent).toBe('status("deployed") AND zone()');
     expect(screen.getByTestId("context")).toHaveTextContent("zone");
     expect(screen.getByRole("listbox")).toBeInTheDocument();
   });
@@ -444,7 +473,7 @@ describe("QueryInput", () => {
     await user.type(input, "status(");
     await user.click(screen.getByText("active"));
 
-    expect(input).toHaveValue('status("active")');
+    expect(input.textContent).toBe('status("active")');
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
@@ -456,7 +485,7 @@ describe("QueryInput", () => {
     await user.type(input, 'status("ac');
     await user.click(screen.getByText("active"));
 
-    expect(input).toHaveValue('status("active")');
+    expect(input.textContent).toBe('status("active")');
   });
 
   it("wraps a value selected outside a filter in its type filter", async () => {
@@ -467,7 +496,7 @@ describe("QueryInput", () => {
     await user.click(input);
     await user.click(screen.getByText("active"));
 
-    expect(input).toHaveValue('status("active")');
+    expect(input.textContent).toBe('status("active")');
     // Cursor stays inside the new filter, as with in-filter insertion
     expect(screen.getByTestId("context")).toHaveTextContent("status");
   });
@@ -484,7 +513,7 @@ describe("QueryInput", () => {
     await user.type(input, 'status("a") AND def');
     await user.click(screen.getByRole("option", { name: /^default/ }));
 
-    expect(input).toHaveValue('status("a") AND zone("default")');
+    expect(input.textContent).toBe('status("a") AND zone("default")');
   });
 
   it("wraps a value with an open fuzzy string in its type filter", async () => {
@@ -499,7 +528,7 @@ describe("QueryInput", () => {
     await user.type(input, '"de');
     await user.click(screen.getByRole("option", { name: /^default/ }));
 
-    expect(input).toHaveValue('zone("default")');
+    expect(input.textContent).toBe('zone("default")');
   });
 
   it("escapes quotes in inserted values", async () => {
@@ -512,7 +541,7 @@ describe("QueryInput", () => {
     await user.type(input, "tag(");
     await user.click(screen.getByRole("option", { name: /a"b/ }));
 
-    expect(input).toHaveValue('tag("a\\"b")');
+    expect(input.textContent).toBe('tag("a\\"b")');
   });
 
   it("replaces the whole string around the cursor and keeps later terms", async () => {
@@ -523,14 +552,15 @@ describe("QueryInput", () => {
     const input = screen.getByRole("searchbox");
     await user.click(input);
     const cursor = 'status("de'.length;
-    await user.keyboard("{ArrowLeft}".repeat(initialSearch.length - cursor));
+    placeCaret(input, cursor);
+    fireEvent.keyUp(input, { key: "ArrowLeft" });
 
     expect(screen.getByTestId("context")).toHaveTextContent("status");
     expect(screen.getByTestId("token")).toHaveTextContent("de");
 
     await user.click(screen.getByText("active"));
 
-    expect(input).toHaveValue('status("active") AND zone("x")');
+    expect(input.textContent).toBe('status("active") AND zone("x")');
   });
 
   it("does not duplicate an existing closing parenthesis", async () => {
@@ -539,10 +569,11 @@ describe("QueryInput", () => {
 
     const input = screen.getByRole("searchbox");
     await user.click(input);
-    await user.keyboard("{ArrowLeft}{ArrowLeft}");
+    placeCaret(input, 'status("ac'.length);
+    fireEvent.keyUp(input, { key: "ArrowLeft" });
     await user.click(screen.getByText("active"));
 
-    expect(input).toHaveValue('status("active")');
+    expect(input.textContent).toBe('status("active")');
   });
 
   it("hides suggestions after closing parenthesis", async () => {
@@ -595,7 +626,8 @@ describe("QueryInput", () => {
 
     const input = screen.getByRole("searchbox");
     await user.click(input);
-    await user.keyboard("{End} ");
+    placeCaret(input, input.textContent?.length ?? 0);
+    await user.keyboard(" ");
 
     // Terms cannot follow without an explicit operator, and NOT only starts
     // a term, so the chain operators are the only suggestions
@@ -644,7 +676,7 @@ describe("QueryInput", () => {
     await user.click(screen.getByRole("option", { name: /^AND/ }));
     await user.click(screen.getByRole("option", { name: /^zone/ }));
 
-    expect(input).toHaveValue('status("a") AND zone(');
+    expect(input.textContent).toBe('status("a") AND zone()');
     expect(screen.getByTestId("context")).toHaveTextContent("zone");
   });
 
@@ -675,8 +707,8 @@ describe("QueryInput", () => {
       "activestatus",
       "inactivestatus",
       "pendingstatus",
-      "status()filter",
-      "created()filter",
+      "statusfilter",
+      "createdfilter",
     ]);
     expect(labels.slice(5)).toEqual([
       "NOToperator",
@@ -728,7 +760,7 @@ describe("QueryInput", () => {
     ).toEqual(["AT LEASToperator"]);
     await user.click(screen.getByRole("option", { name: /^AT LEAST/ }));
 
-    expect(input).toHaveValue("memory(AT LEAST ");
+    expect(input.textContent).toBe("memory(AT LEAST ");
     expect(screen.getByTestId("context")).toHaveTextContent("memory");
   });
 
@@ -745,7 +777,7 @@ describe("QueryInput", () => {
     ).toEqual(["NOToperator"]);
     await user.click(screen.getByRole("option", { name: /^NOT/ }));
 
-    expect(input).toHaveValue("NOT ");
+    expect(input.textContent).toBe("NOT ");
   });
 
   it("normalizes a fully typed chain operator with different case", async () => {
@@ -756,7 +788,7 @@ describe("QueryInput", () => {
     await user.type(input, 'status("a") or');
     await user.click(screen.getByRole("option", { name: /^OR/ }));
 
-    expect(input).toHaveValue('status("a") OR ');
+    expect(input.textContent).toBe('status("a") OR ');
   });
 
   it("hides an operator once it is typed exactly", async () => {
@@ -780,7 +812,7 @@ describe("QueryInput", () => {
     await user.type(input, 'status("a") O');
     await user.click(screen.getByRole("option", { name: /^OR/ }));
 
-    expect(input).toHaveValue('status("a") OR ');
+    expect(input.textContent).toBe('status("a") OR ');
     expect(screen.getByTestId("token")).toBeEmptyDOMElement();
     expect(screen.getByRole("listbox")).toBeInTheDocument();
   });
@@ -887,16 +919,33 @@ describe("QueryInput", () => {
     expect(mockSetToken).toHaveBeenCalled();
   });
 
-  it("handles clear button functionality", async () => {
+  it("submits the query on Ctrl+Enter", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <QueryInput
+        {...defaultProps}
+        search="existing text"
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.click(screen.getByRole("searchbox"));
+    await user.keyboard("{Control>}{Enter}{/Control}");
+
+    expect(onSubmit).toHaveBeenCalledWith("existing text");
+  });
+
+  it("clears the query on Escape once suggestions are closed", async () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} search="existing text" />);
 
-    // SearchBox component should have a clear button
-    const clearButton = screen.getByRole("button", { name: /clear/i });
-    await user.click(clearButton);
+    await user.click(screen.getByRole("searchbox"));
+    await user.keyboard("{Escape}");
+    expect(mockSetSearch).not.toHaveBeenCalledWith("");
 
-    // Should hide suggestions when cleared
-    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(mockSetSearch).toHaveBeenCalledWith("");
   });
 
   it("maintains cursor position correctly", async () => {
@@ -914,5 +963,171 @@ describe("QueryInput", () => {
     // Should update context/token based on cursor position
     expect(mockSetContext).toHaveBeenCalled();
     expect(mockSetToken).toHaveBeenCalled();
+  });
+
+  it("mirrors the typed text in the field", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a") or "free');
+
+    expect(input.textContent).toBe('status("a") or "free');
+  });
+
+  it("renders filter and operator chips, with fuzzy text unchanged", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a") AND "free');
+
+    expect(
+      Array.from(input.querySelectorAll("[data-chip]")).map((chip) => [
+        chip.textContent,
+        chip.className,
+      ]),
+    ).toEqual([
+      [
+        "status(",
+        "p-chip is-readonly is-inline p-query-input__chip p-query-input__chip--filter",
+      ],
+      [
+        ")",
+        "p-chip is-readonly is-inline p-query-input__chip p-query-input__chip--filter-close",
+      ],
+      [
+        "AND",
+        "p-chip is-readonly is-inline p-query-input__chip p-query-input__chip--operator",
+      ],
+    ]);
+    expect(
+      input.querySelector(".p-query-input__token--fuzzy")?.textContent,
+    ).toBe('"free');
+  });
+
+  it("highlights a filter on Backspace, then removes the whole filter", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper initialSearch='status("a") AND x' />);
+
+    const input = screen.getByRole("searchbox");
+    await user.click(input);
+    placeCaret(input, 'status("'.length - 1);
+    await user.keyboard("{Backspace}");
+
+    expect(
+      input.querySelectorAll(".p-query-input__unit.is-selected"),
+    ).toHaveLength(1);
+    expect(input.textContent).toBe('status("a") AND x');
+
+    await user.keyboard("{Backspace}");
+
+    expect(input.textContent).toBe(" AND x");
+  });
+
+  it("moves the caret out of a chip instead of throwing", () => {
+    render(<QueryInput {...defaultProps} search={'x status("a")'} />);
+    const input = screen.getByRole("searchbox");
+    const chipText = input.querySelector(
+      ".p-query-input__chip--filter .p-chip__value",
+    )!.firstChild!;
+
+    input.focus();
+    document.getSelection()!.collapse(chipText, 3);
+    fireEvent.input(input);
+
+    const caretNode = document.getSelection()!.anchorNode!;
+    expect(caretNode.parentElement?.closest("[data-chip]")).toBeNull();
+  });
+
+  it("closes a typed grouping parenthesis right after the caret", () => {
+    const Controlled = () => {
+      const [search, setSearch] = useState("x ");
+      return (
+        <QueryInput {...defaultProps} search={search} setSearch={setSearch} />
+      );
+    };
+    render(<Controlled />);
+    const input = screen.getByRole("searchbox");
+    input.focus();
+
+    // The browser types the "(" into the caret's text node, then fires input
+    const text = input.lastChild as Text;
+    text.data = "(";
+    document.getSelection()!.collapse(text, 1);
+    fireEvent.input(input);
+
+    expect(input.textContent).toBe("x ()");
+  });
+
+  it("does not close a filter's parenthesis", () => {
+    const Controlled = () => {
+      const [search, setSearch] = useState("x ");
+      return (
+        <QueryInput {...defaultProps} search={search} setSearch={setSearch} />
+      );
+    };
+    render(<Controlled />);
+    const input = screen.getByRole("searchbox");
+    input.focus();
+
+    const text = input.lastChild as Text;
+    text.data = "status(";
+    document.getSelection()!.collapse(text, 7);
+    fireEvent.input(input);
+
+    expect(input.textContent).toBe("x status(");
+  });
+
+  it("steps over the closer of a grouping instead of doubling it", () => {
+    const Controlled = () => {
+      const [search, setSearch] = useState("x ()");
+      return (
+        <QueryInput {...defaultProps} search={search} setSearch={setSearch} />
+      );
+    };
+    render(<Controlled />);
+    const input = screen.getByRole("searchbox");
+    input.focus();
+
+    // The browser types ")" after the "(" and before the existing ")"
+    const walker = document.createTreeWalker(input, NodeFilter.SHOW_TEXT);
+    let open = walker.nextNode() as Text | null;
+    while (open && !open.data.includes("(")) {
+      open = walker.nextNode() as Text | null;
+    }
+    open!.data = "()";
+    document.getSelection()!.collapse(open!, 2);
+    fireEvent.input(input);
+
+    expect(input.textContent).toBe("x ()");
+  });
+
+  it("rings every unit the selection touches, and clears when collapsed", () => {
+    render(<QueryInput {...defaultProps} search={'status("a") AND x'} />);
+    const input = screen.getByRole("searchbox");
+
+    document.getSelection()!.selectAllChildren(input);
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(
+      input.querySelectorAll(".p-query-input__unit.is-selected"),
+    ).toHaveLength(2);
+
+    document.getSelection()!.removeAllRanges();
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(
+      input.querySelectorAll(".p-query-input__unit.is-selected"),
+    ).toHaveLength(0);
+  });
+
+  it("nests an inner filter's ring inside the filter that contains it", () => {
+    render(<QueryInput {...defaultProps} search={'machine(zone("de"))'} />);
+    const input = screen.getByRole("searchbox");
+    const units = input.querySelectorAll(".p-query-input__unit");
+
+    expect(units).toHaveLength(2);
+    expect(units[1].parentElement!.closest(".p-query-input__unit")).toBe(
+      units[0],
+    );
   });
 });
