@@ -1,4 +1,10 @@
-import { analyzeQuery, stepOverUnit, tokenizeQuery } from "./queryAnalyzer";
+import {
+  analyzeQuery,
+  segmentQuery,
+  stepOverUnit,
+  toDottedQuery,
+  tokenizeQuery,
+} from "./queryAnalyzer";
 
 const kinds = (input: string) =>
   tokenizeQuery(input)
@@ -103,5 +109,64 @@ describe("analyzeQuery completeQuery", () => {
 
     expect(analysis.completeQuery).toBe(expected);
     expect(analysis.ast).not.toBeNull();
+  });
+});
+
+describe("toDottedQuery", () => {
+  it.each([
+    ['fabric(vlan("default"))', 'fabric.vlan("default")'],
+    ['a(b(c("x")))', 'a.b.c("x")'],
+    ['fabric(vlan("default") AND x)', 'fabric(vlan("default") AND x)'],
+    ['status("a") AND zone(default)', 'status("a") AND zone(default)'],
+  ])("writes nested filters with dots: %j", (input, expected) => {
+    expect(toDottedQuery(input)).toBe(expected);
+  });
+});
+
+describe("segmentQuery closing parenthesis", () => {
+  it("keeps a filter's closer a chip when its value is unterminated", () => {
+    const input = 'status("Dep)';
+
+    expect(segmentQuery(input).units).toEqual([
+      {
+        kind: "filter",
+        start: 0,
+        end: input.length,
+        anchors: [7, input.length],
+      },
+    ]);
+  });
+});
+
+describe("analyzeQuery whitespace", () => {
+  it("collapses padding in the valid query but keeps spaces in strings", () => {
+    const analysis = analyzeQuery('  status("Ready")    AND zone("a")  ');
+
+    expect(analysis.completeQuery).toBe('status("Ready") AND zone("a")');
+    expect(analysis.ast).not.toBeNull();
+    expect(analyzeQuery('status("a  b")').completeQuery).toBe('status("a  b")');
+    expect(
+      analyzeQuery('fabric( "a" )   AND ( zone("b") )').completeQuery,
+    ).toBe('fabric("a") AND (zone("b"))');
+  });
+});
+
+describe("analyzeQuery mixed filter content", () => {
+  it.each([
+    'fabric("fabric-0" OR vlan("mgmt"))',
+    'fabric("a" OR b("c"))',
+    'fabric(vlan("mgmt") AND "b")',
+  ])("parses values mixed with sub-filters: %j", (input) => {
+    const analysis = analyzeQuery(input);
+
+    expect(analysis.completeQuery).toBe(input);
+    expect(analysis.ast).not.toBeNull();
+  });
+
+  it("offers operators after a filter whose content mixes terms", () => {
+    const analysis = analyzeQuery('fabric("fabric-0" OR vlan("mgmt"))');
+
+    expect(analysis.operators).toEqual(["AND", "OR"]);
+    expect(analysis.acceptsTerm).toBe(false);
   });
 });

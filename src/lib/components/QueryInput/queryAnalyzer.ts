@@ -115,6 +115,22 @@ const protectedSpans = (unit: QueryUnit): [number, number][] => {
     : [opener];
 };
 
+// Collapses each whitespace run outside strings to one space, and drops runs
+// at the ends or just inside a parenthesis, so padding does not carry into the
+// valid query
+const collapseWhitespace = (input: string): string => {
+  const tokens = tokenizeQuery(input);
+  return tokens
+    .map((token, index) => {
+      if (!/^\s+$/.test(token.text)) return token.text;
+      const before = tokens[index - 1]?.text;
+      const after = tokens[index + 1]?.text;
+      const isEdge = index === 0 || index === tokens.length - 1;
+      return isEdge || before === "(" || after === ")" ? "" : " ";
+    })
+    .join("");
+};
+
 export const analyzeQuery = (
   input: string,
   cursorPosition: number = input.length,
@@ -286,9 +302,9 @@ export const analyzeQuery = (
   const fullAst = parseQuery(input);
   const completeQuery =
     fullAst !== null
-      ? input
+      ? collapseWhitespace(input)
       : stripDanglingOperators(inputUntilCursor.slice(0, trimAt));
-  const ast = fullAst !== null ? fullAst : parseQuery(completeQuery);
+  const ast = parseQuery(completeQuery);
 
   const prevChar = inputUntilCursor[cursor - 1];
   const shouldHideSuggestions =
@@ -443,10 +459,18 @@ export const tokenizeQuery = (input: string): QueryToken[] => {
     } else if (WHITESPACE.test(char)) {
       while (end < input.length && WHITESPACE.test(input[end])) end++;
     } else if (char === '"') {
-      while (end < input.length && input[end] !== '"') {
-        end += input[end] === "\\" ? 2 : 1;
+      // An unterminated string ends before the next ")", which always closes
+      // the filter it belongs to
+      let close = index + 1;
+      while (close < input.length && input[close] !== '"') {
+        close += input[close] === "\\" ? 2 : 1;
       }
-      end = Math.min(end + 1, input.length);
+      if (close < input.length) {
+        end = close + 1;
+      } else {
+        const paren = input.indexOf(")", index + 1);
+        end = paren === -1 ? input.length : paren;
+      }
       kind = openGroups.includes(true) ? "value" : "fuzzy";
     } else {
       const operator = input.slice(index).match(OPERATOR_PHRASE);
@@ -586,4 +610,57 @@ export const segmentQuery = (
   }
 
   return { segments, units };
+};
+
+// Writes nested filters with dot syntax: fabric(vlan("default")) becomes
+// fabric.vlan("default"). A filter whose content is exactly one nested filter
+// joins that filter's name, and the chain continues through deeper nesting
+export const toDottedQuery = (input: string): string => {
+  const filters = new Map<number, QueryUnit>();
+  for (const unit of segmentQuery(input).units) {
+    if (unit.kind === "filter") filters.set(unit.start, unit);
+  }
+
+  // A filter's content lies between its "(" and its ")" when closed
+  const contentOf = (unit: QueryUnit): [number, number] => [
+    unit.anchors[0],
+    unit.anchors.length === 2 ? unit.end - 1 : unit.end,
+  ];
+
+  // The one filter that makes up a filter's whole content, ignoring whitespace
+  const soleChildOf = (unit: QueryUnit): QueryUnit | undefined => {
+    let [start, end] = contentOf(unit);
+    while (start < end && WHITESPACE.test(input[start])) start++;
+    while (end > start && WHITESPACE.test(input[end - 1])) end--;
+    const child = filters.get(start);
+    return child !== undefined && child.end === end ? child : undefined;
+  };
+
+  const render = (from: number, to: number): string => {
+    let output = "";
+    let position = from;
+    while (position < to) {
+      const unit = filters.get(position);
+      if (unit === undefined || unit.end > to) {
+        output += input[position];
+        position += 1;
+        continue;
+      }
+      const names = [input.slice(unit.start, unit.anchors[0] - 1)];
+      let inner = unit;
+      let child = soleChildOf(inner);
+      while (child !== undefined) {
+        names.push(input.slice(child.start, child.anchors[0] - 1));
+        inner = child;
+        child = soleChildOf(inner);
+      }
+      const [start, end] = contentOf(inner);
+      const closer = inner.anchors.length === 2 ? ")" : "";
+      output += `${names.join(".")}(${render(start, end)}${closer}`;
+      position = unit.end;
+    }
+    return output;
+  };
+
+  return render(0, input.length);
 };

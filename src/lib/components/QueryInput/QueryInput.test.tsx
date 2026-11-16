@@ -371,6 +371,18 @@ describe("QueryInput", () => {
     expect(firstOption).toHaveAttribute("aria-selected", "true");
   });
 
+  it("does not open suggestions when disabled", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<QueryInput {...defaultProps} />);
+    await user.click(screen.getByRole("searchbox"));
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    unmount();
+
+    render(<QueryInput {...defaultProps} disabled />);
+    await user.click(screen.getByRole("searchbox"));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
   it("sets context to the open filter name", async () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
@@ -1058,6 +1070,57 @@ describe("QueryInput", () => {
     fireEvent.input(input);
 
     expect(input.textContent).toBe("x ()");
+  });
+
+  it("keeps a filter whole when a character is typed right before it", () => {
+    const Controlled = () => {
+      const [search, setSearch] = useState('status("a")');
+      return (
+        <QueryInput {...defaultProps} search={search} setSearch={setSearch} />
+      );
+    };
+    render(<Controlled />);
+    const input = screen.getByRole("searchbox");
+    input.focus();
+
+    const leading = input.querySelector(
+      ".p-query-input__unit .p-query-input__text",
+    )!.firstChild as Text;
+    leading.data = "x";
+    document.getSelection()!.collapse(leading, 1);
+    fireEvent.input(input);
+
+    expect(input.textContent).toBe('x status("a")');
+    expect(
+      input.querySelector(".p-query-input__chip--filter .p-chip__value")
+        ?.textContent,
+    ).toBe("status");
+  });
+
+  it("keeps the space before a filter when it is deleted", () => {
+    const Controlled = () => {
+      const [search, setSearch] = useState('x status("a")');
+      return (
+        <QueryInput {...defaultProps} search={search} setSearch={setSearch} />
+      );
+    };
+    render(<Controlled />);
+    const input = screen.getByRole("searchbox");
+    input.focus();
+
+    // Backspace clears the space node; the caret then sits after the "x"
+    const space = Array.from(input.childNodes).find(
+      (node) => node.textContent === " ",
+    ) as Text;
+    space.data = "";
+    document.getSelection()!.collapse(space, 0);
+    fireEvent.input(input);
+
+    expect(input.textContent).toBe('x status("a")');
+    expect(
+      input.querySelector(".p-query-input__chip--filter .p-chip__value")
+        ?.textContent,
+    ).toBe("status");
   });
 
   it("does not close a filter's parenthesis", () => {

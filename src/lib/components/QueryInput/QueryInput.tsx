@@ -158,12 +158,46 @@ const isTypedGroupClose = (
   !analyzeQuery(value, cursor).isInString &&
   openDepth(value.slice(0, cursor - 1)) > 0;
 
-// The query after one typed character, from the field's text
+// A character typed directly before a filter would fuse with the filter's name,
+// so "x" before status(...) would read as xstatus(...). A space after it keeps
+// the filter whole
+const isTypedBeforeFilter = (
+  typed: string,
+  cursor: number,
+  previous: string,
+): boolean =>
+  typed.length === previous.length + 1 &&
+  !/[\s()]/.test(typed[cursor - 1]) &&
+  segmentQuery(previous).units.some(
+    (unit) => unit.kind === "filter" && unit.start === cursor - 1,
+  );
+
+// Deleting the space before a filter would fuse the same way, so the deletion
+// is undone and the caret stays before the space
+const isDeletedBeforeFilter = (
+  typed: string,
+  cursor: number,
+  previous: string,
+): boolean =>
+  typed.length === previous.length - 1 &&
+  previous[cursor] === " " &&
+  typed.slice(0, cursor) === previous.slice(0, cursor) &&
+  typed.slice(cursor) === previous.slice(cursor + 1) &&
+  segmentQuery(typed).units.some(
+    (unit) =>
+      unit.kind === "filter" && unit.start < cursor && cursor < unit.anchors[0],
+  );
+
+// The query after one edit to the field's text
 const withTypedCharacter = (
   typed: string,
   cursor: number,
   previous: string,
 ): string => {
+  if (isDeletedBeforeFilter(typed, cursor, previous)) return previous;
+  if (isTypedBeforeFilter(typed, cursor, previous)) {
+    return typed.slice(0, cursor) + " " + typed.slice(cursor);
+  }
   if (isTypedGroupOpen(typed, cursor, previous)) {
     return typed.slice(0, cursor) + ")" + typed.slice(cursor);
   }
@@ -188,6 +222,14 @@ const renderEditor = (
   const wrappers = new Map<number, HTMLElement>();
   // Filters still open, innermost last
   const open: number[] = [];
+  // Text inside a unit sits in a span: a flex row drops bare whitespace between
+  // its items, and an empty span keeps a caret position
+  const slot = (text: string): HTMLElement => {
+    const span = document.createElement("span");
+    span.className = "p-query-input__text";
+    span.append(document.createTextNode(text));
+    return span;
+  };
   const place = (...added: Node[]) => {
     const parent = open.length > 0 ? wrappers.get(open.at(-1)!) : undefined;
     if (parent) parent.append(...added);
@@ -202,7 +244,11 @@ const renderEditor = (
         fuzzy.textContent = segment.text;
         place(fuzzy);
       } else {
-        place(document.createTextNode(segment.text));
+        place(
+          open.length > 0
+            ? slot(segment.text)
+            : document.createTextNode(segment.text),
+        );
       }
       continue;
     }
@@ -234,7 +280,7 @@ const renderEditor = (
 
     if (segment.role === "filter-close") {
       // The closer joins its filter's wrapper, which then closes
-      wrappers.get(segment.unit)?.append(document.createTextNode(""), chip);
+      wrappers.get(segment.unit)?.append(slot(""), chip);
       open.pop();
       continue;
     }
@@ -244,12 +290,16 @@ const renderEditor = (
     element.dataset.unit = String(segment.unit);
     element.dataset.start = String(unit.start);
     element.dataset.end = String(unit.end);
-    element.append(document.createTextNode(""), chip);
+    element.append(slot(""), chip);
     wrappers.set(segment.unit, element);
     place(element);
     if (segment.role === "filter") open.push(segment.unit);
   }
-  nodes.push(document.createTextNode(""));
+  // An empty field needs a line box whether or not it is editable. A <br> gives
+  // one without adding text, which the value is read back from
+  nodes.push(
+    value === "" ? document.createElement("br") : document.createTextNode(""),
+  );
 
   root.replaceChildren(...nodes);
   root.dataset.empty = String(value === "");
@@ -369,7 +419,8 @@ export const QueryInput = ({
     () => analyzeQuery(search, suggestionState.cursorPosition),
     [search, suggestionState.cursorPosition],
   );
-  const isSuggesting = suggestionState.isVisible && !overwritesUnit;
+  const isSuggesting =
+    !disabled && suggestionState.isVisible && !overwritesUnit;
   const units = useMemo(() => segmentQuery(search).units, [search]);
   const allSuggestions = useMemo(() => {
     const operatorSuggestions = operators.map((value) => ({
@@ -787,7 +838,11 @@ export const QueryInput = ({
       ref={panelRef}
       {...props}
     >
-      <div className="p-query-input__bar">
+      <div
+        className={classNames("p-query-input__bar", {
+          "is-disabled": disabled,
+        })}
+      >
         <div
           className="p-query-input__field"
           ref={editorRef}
@@ -862,7 +917,7 @@ export const QueryInput = ({
                     )}
                   </span>
                   {item.type !== "more" && (
-                    <span className="u-text--muted u-align-text--right">
+                    <span className="u-text--muted u-align-text--right p-query-input__item-type">
                       {item.type}
                     </span>
                   )}

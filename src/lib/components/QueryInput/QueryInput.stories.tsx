@@ -7,170 +7,123 @@ import {
   analyzeQuery,
   type QueryTokenKind,
   tokenizeQuery,
+  toDottedQuery,
 } from "@/lib/components/QueryInput/queryAnalyzer";
 
-const mockSuggestionData: Suggestion[] = [
+// Machine shape from maas-ui (src/app/store/machine/types/base.ts). Nested refs
+// such as zone and pool are { id, name } objects, so their values come from
+// `.name`. A VLAN belongs to a fabric, so VLANs are nested under their fabric
+type ModelRef = { id: number; name: string };
+
+type FabricFixture = ModelRef & { vlans: ModelRef[] };
+
+type MachineFixture = {
+  hostname: string;
+  status: string;
+  owner: string;
+  architecture: string;
+  pool: ModelRef;
+  zone: ModelRef;
+  fabrics: FabricFixture[];
+  spaces: string[];
+};
+
+const fabric0: FabricFixture = {
+  id: 0,
+  name: "fabric-0",
+  vlans: [{ id: 0, name: "default" }],
+};
+
+const fabric1: FabricFixture = {
+  id: 1,
+  name: "fabric-1",
+  vlans: [
+    { id: 1, name: "default" },
+    { id: 2, name: "mgmt" },
+  ],
+};
+
+const machines: MachineFixture[] = [
   {
-    value: "status",
-    type: "filter",
+    hostname: "mlod2s001",
+    status: "Deployed",
+    owner: "maas",
+    architecture: "amd64/generic",
+    pool: { id: 1, name: "default" },
+    zone: { id: 1, name: "default" },
+    fabrics: [fabric0],
+    spaces: ["outer"],
   },
   {
-    value: "deployment_target",
-    type: "filter",
+    hostname: "mlod2s002",
+    status: "Ready",
+    owner: "acbuyukyilmaz",
+    architecture: "amd64/generic",
+    pool: { id: 2, name: "reserve" },
+    zone: { id: 2, name: "danger" },
+    fabrics: [fabric1],
+    spaces: ["empty"],
   },
   {
-    value: "owner",
-    type: "filter",
-  },
-  {
-    value: "pool",
-    type: "filter",
-  },
-  {
-    value: "architecture",
-    type: "filter",
-  },
-  {
-    value: "tag",
-    type: "filter",
-  },
-  {
-    value: "workload",
-    type: "filter",
-  },
-  {
-    value: "kvm",
-    type: "filter",
-  },
-  {
-    value: "subnet",
-    type: "filter",
-  },
-  {
-    value: "fabric",
-    type: "filter",
-  },
-  {
-    value: "zone",
-    type: "filter",
-  },
-  {
-    value: "vlan",
-    type: "filter",
-  },
-  {
-    value: "space",
-    type: "filter",
-  },
-  {
-    value: "new",
-    type: "status",
-  },
-  {
-    value: "ready",
-    type: "status",
-  },
-  {
-    value: "deployed",
-    type: "status",
-  },
-  {
-    value: "memory",
-    type: "deployment_target",
-  },
-  {
-    value: "disk",
-    type: "deployment_target",
-  },
-  {
-    value: "maas",
-    type: "owner",
-  },
-  {
-    value: "acbuyukyilmaz",
-    type: "owner",
-  },
-  {
-    value: "default",
-    type: "pool",
-  },
-  {
-    value: "reserve",
-    type: "pool",
-  },
-  {
-    value: "amd64/generic",
-    type: "architecture",
-  },
-  {
-    value: "mlod2s001",
-    type: "tag",
-  },
-  {
-    value: "mlod2s002",
-    type: "tag",
-  },
-  {
-    value: "mlod2s003",
-    type: "tag",
-  },
-  {
-    value: "eu6ww001",
-    type: "workload",
-  },
-  {
-    value: "eu6ww002",
-    type: "workload",
-  },
-  {
-    value: "able-egret",
-    type: "kvm",
-  },
-  {
-    value: "busy-dog",
-    type: "kvm",
-  },
-  {
-    value: "bright-wombat",
-    type: "kvm",
-  },
-  {
-    value: "10.141.77.0/24",
-    type: "subnet",
-  },
-  {
-    value: "104.255.113.0/24",
-    type: "subnet",
-  },
-  {
-    value: "fabric-0",
-    type: "fabric",
-  },
-  {
-    value: "fabric-1",
-    type: "fabric",
-  },
-  {
-    value: "default",
-    type: "zone",
-  },
-  {
-    value: "danger",
-    type: "zone",
-  },
-  {
-    value: "default",
-    type: "vlan",
-  },
-  {
-    value: "empty",
-    type: "space",
-  },
-  {
-    value: "outer",
-    type: "space",
+    hostname: "eu6ww001",
+    status: "Deployed",
+    owner: "maas",
+    architecture: "arm64/generic",
+    pool: { id: 2, name: "reserve" },
+    zone: { id: 1, name: "default" },
+    fabrics: [fabric0, fabric1],
+    spaces: ["outer"],
   },
 ];
+
+// The field each filter's values are read from. A complex value defaults to
+// its name, so zone and pool read `.name`. A filter with a parent is suggested
+// only inside that parent
+const FILTER_FIELDS: {
+  filter: string;
+  path: string;
+  parent?: string;
+  read: (machine: MachineFixture) => string[];
+}[] = [
+  { filter: "status", path: "status", read: (m) => [m.status] },
+  { filter: "owner", path: "owner", read: (m) => [m.owner] },
+  { filter: "pool", path: "pool.name", read: (m) => [m.pool.name] },
+  { filter: "zone", path: "zone.name", read: (m) => [m.zone.name] },
+  {
+    filter: "architecture",
+    path: "architecture",
+    read: (m) => [m.architecture],
+  },
+  {
+    filter: "fabric",
+    path: "fabrics.name",
+    read: (m) => m.fabrics.map((f) => f.name),
+  },
+  {
+    filter: "vlan",
+    path: "fabrics.vlans.name",
+    parent: "fabric",
+    read: (m) => m.fabrics.flatMap((f) => f.vlans.map((v) => v.name)),
+  },
+  { filter: "space", path: "spaces", read: (m) => m.spaces },
+];
+
+const rootFilterNames = FILTER_FIELDS.filter((f) => f.parent === undefined).map(
+  (f) => f.filter,
+);
+
+const subFilterNames = (parent: string) =>
+  FILTER_FIELDS.filter((f) => f.parent === parent).map((f) => f.filter);
+
+const machineSuggestions: Suggestion[] = FILTER_FIELDS.flatMap(
+  ({ filter, read }) => [
+    { value: filter, type: "filter" },
+    ...[...new Set(machines.flatMap(read))].map((value) => ({
+      value,
+      type: filter,
+    })),
+  ],
+);
 
 const meta: Meta<typeof QueryInput> = {
   title: "Components/QueryInput",
@@ -187,7 +140,7 @@ const meta: Meta<typeof QueryInput> = {
   },
   tags: ["autodocs"],
   args: {
-    suggestions: mockSuggestionData,
+    suggestions: machineSuggestions,
   },
   argTypes: {
     disabled: {
@@ -291,6 +244,33 @@ const ParsedQuery = ({ label, query }: { label: string; query: string }) => (
   </div>
 );
 
+// Lists each filter's source field and the values read from the machines
+const MachineFieldTable = () => (
+  <div>
+    <p className="u-text--muted">Machine fields</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Filter</th>
+          <th>Field</th>
+          <th>Values</th>
+        </tr>
+      </thead>
+      <tbody>
+        {FILTER_FIELDS.map(({ filter, path, read }) => (
+          <tr key={filter}>
+            <td>{filter}</td>
+            <td>
+              <code>{path}</code>
+            </td>
+            <td>{[...new Set(machines.flatMap(read))].join(", ")}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
 export const Default: Story = {
   render: (args) => {
     const [search, setSearch] = useState<string>("");
@@ -299,10 +279,21 @@ export const Default: Story = {
 
     let suggestions: Suggestion[] = args.suggestions;
 
-    if (search === "") {
-      suggestions = suggestions.filter((s) => s.type === "filter");
-    } else if (context.length > 0) {
-      suggestions = suggestions.filter((s) => s.type === context);
+    if (context.length === 0) {
+      // Outside any filter, suggest root filter names only
+      suggestions = suggestions.filter(
+        (s) => s.type === "filter" && rootFilterNames.includes(s.value),
+      );
+    } else {
+      // Inside a filter, suggest its values and its sub-filter names. Nested
+      // filters use the innermost name, e.g. vlan in fabric.vlan
+      const innermost = context.split(".").pop() ?? "";
+      const subFilters = subFilterNames(innermost);
+      suggestions = suggestions.filter(
+        (s) =>
+          s.type === innermost ||
+          (s.type === "filter" && subFilters.includes(s.value)),
+      );
     }
 
     if (token.length > 0) {
@@ -321,6 +312,7 @@ export const Default: Story = {
           setContext={setContext}
           setToken={setToken}
           suggestions={suggestions}
+          placeholder="Search machines..."
         />
         <div
           style={{
@@ -333,8 +325,9 @@ export const Default: Story = {
           <ParsedQuery label="Raw query" query={search} />
           <ParsedQuery
             label="Valid query"
-            query={analyzeQuery(search).completeQuery}
+            query={toDottedQuery(analyzeQuery(search).completeQuery)}
           />
+          <MachineFieldTable />
         </div>
       </div>
     );
@@ -346,6 +339,7 @@ export const Disabled: Story = {
     return (
       <QueryInput
         disabled
+        placeholder="Search machines..."
         search={""}
         setSearch={() => {}}
         setContext={() => {}}
@@ -365,6 +359,7 @@ export const Loading: Story = {
     return (
       <QueryInput
         isLoading
+        placeholder="Search machines..."
         search={search}
         setSearch={setSearch}
         setContext={setContext}

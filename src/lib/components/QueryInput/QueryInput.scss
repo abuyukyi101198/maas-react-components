@@ -16,15 +16,21 @@
     outline: none;
     overflow-wrap: anywhere;
     padding: $input-vertical-padding $sph--large;
-    white-space: pre-wrap;
+    position: relative;
 
-    &[aria-disabled="true"] {
-      color: $colors--theme--text-inactive;
-    }
+    // The transparent top border matches the input the bar replaces, so the
+    // field keeps the input's height
+    border-top: $input-border-thickness solid transparent;
+    white-space: pre-wrap;
 
     &[data-empty="true"]::before {
       content: attr(data-placeholder);
       color: $colors--theme--text-muted;
+      left: 0;
+      padding: $input-vertical-padding $sph--large;
+      pointer-events: none;
+      position: absolute;
+      top: 0;
     }
   }
 
@@ -42,6 +48,11 @@
     &:focus-within {
       outline: $input-border-thickness solid $colors--theme--focus;
     }
+
+    &.is-disabled {
+      cursor: not-allowed;
+      opacity: $disabled-element-opacity;
+    }
   }
 
   .p-query-input__actions {
@@ -53,6 +64,10 @@
 
   .p-query-input__token--fuzzy {
     color: $colors--theme--text-muted;
+  }
+
+  .p-query-input__item-type {
+    font-family: unquote($font-monospace);
   }
 
   // Chips use Vanilla's p-chip pattern; these rules add the editor's kinds
@@ -121,6 +136,12 @@
     display: inline-flex;
     align-items: center;
     border-radius: 999px;
+  }
+
+  // Text slots inside a unit hold spaces and the caret. The zero-width glyph
+  // gives an empty slot a line to sit on
+  .p-query-input__text::before {
+    content: "\200b";
   }
 
   .p-query-input__unit.is-selected {
