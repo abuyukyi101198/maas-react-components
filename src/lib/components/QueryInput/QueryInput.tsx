@@ -102,18 +102,36 @@ export const QueryInput = ({
   const listRef = useRef<HTMLUListElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Operators come from the grammar, not the data layer. They lead after a
+  // complete term and trail the data at the start of a term; data terms the
+  // grammar cannot accept without an operator are dropped.
+  const { operators, acceptsTerm, isTokenInChain } = useMemo(
+    () => analyzeQuery(search, suggestionState.cursorPosition),
+    [search, suggestionState.cursorPosition],
+  );
+  const allSuggestions = useMemo(() => {
+    const operatorSuggestions = operators.map((value) => ({
+      value,
+      type: "operator",
+    }));
+    const termSuggestions = acceptsTerm ? suggestions : [];
+    return isTokenInChain
+      ? [...operatorSuggestions, ...termSuggestions]
+      : [...termSuggestions, ...operatorSuggestions];
+  }, [operators, acceptsTerm, isTokenInChain, suggestions]);
+
   const visibleSuggestions = useMemo(() => {
     const maxToShow = suggestionState.showingMore
       ? SUGGESTION_LIMITS.EXPANDED
       : SUGGESTION_LIMITS.DEFAULT;
-    const capped = suggestions.slice(0, maxToShow);
+    const capped = allSuggestions.slice(0, maxToShow);
     const shouldShowMore =
-      !suggestionState.showingMore && suggestions.length > maxToShow;
+      !suggestionState.showingMore && allSuggestions.length > maxToShow;
 
     return shouldShowMore
       ? [...capped, { value: "Show more...", type: "more" }]
       : capped;
-  }, [suggestions, suggestionState.showingMore]);
+  }, [allSuggestions, suggestionState.showingMore]);
 
   const updateSuggestionState = useCallback(
     (
@@ -181,7 +199,7 @@ export const QueryInput = ({
       updateSuggestionState({
         highlightedIndex: 0,
         showingMore: false,
-        isVisible: selected.type === "filter",
+        isVisible: selected.type === "filter" || selected.type === "operator",
         cursorPosition: newCursorPosition,
       });
     },
@@ -367,7 +385,7 @@ export const QueryInput = ({
         aria-haspopup="listbox"
         aria-owns="query-suggestions"
       />
-      {suggestionState.isVisible && suggestions.length > 0 && (
+      {suggestionState.isVisible && allSuggestions.length > 0 && (
         <ul
           className="p-query-input__list"
           ref={listRef}

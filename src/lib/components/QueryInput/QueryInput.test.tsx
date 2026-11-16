@@ -110,14 +110,16 @@ describe("QueryInput", () => {
     expect(screen.getByText("inactive")).toBeInTheDocument();
   });
 
-  it("hides suggestions when no suggestions available", async () => {
+  it("shows only component-owned operators when no suggestions are available", async () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} suggestions={[]} />);
 
     const input = screen.getByRole("searchbox");
     await user.click(input);
 
-    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["NOToperator"]);
   });
 
   it("shows loading spinner when isLoading=true", async () => {
@@ -184,7 +186,8 @@ describe("QueryInput", () => {
     await user.click(showMoreButton);
 
     const options = screen.getAllByRole("option");
-    expect(options).toHaveLength(10); // All 10 items, no more "Show more..."
+    // All 10 items plus the NOT operator, no more "Show more..."
+    expect(options).toHaveLength(11);
     expect(screen.queryByText("Show more...")).not.toBeInTheDocument();
   });
 
@@ -386,7 +389,7 @@ describe("QueryInput", () => {
     render(<QueryInputTestWrapper />);
 
     const input = screen.getByRole("searchbox");
-    await user.type(input, 'status("a") zone("de');
+    await user.type(input, 'status("a") AND zone("de');
 
     expect(screen.getByTestId("context")).toHaveTextContent("zone");
     expect(screen.getByTestId("token")).toHaveTextContent("de");
@@ -416,7 +419,7 @@ describe("QueryInput", () => {
     expect(screen.getByTestId("context")).toHaveTextContent("created");
   });
 
-  it("inserts a filter after a complete term and keeps suggestions open", async () => {
+  it("inserts a filter after a chain operator and keeps suggestions open", async () => {
     const user = userEvent.setup();
     render(
       <QueryInputTestWrapper
@@ -425,10 +428,10 @@ describe("QueryInput", () => {
     );
 
     const input = screen.getByRole("searchbox");
-    await user.type(input, 'status("deployed") ');
+    await user.type(input, 'status("deployed") AND ');
     await user.click(screen.getByRole("option", { name: /zone/ }));
 
-    expect(input).toHaveValue('status("deployed") zone(');
+    expect(input).toHaveValue('status("deployed") AND zone(');
     expect(screen.getByTestId("context")).toHaveTextContent("zone");
     expect(screen.getByRole("listbox")).toBeInTheDocument();
   });
@@ -456,6 +459,49 @@ describe("QueryInput", () => {
     expect(input).toHaveValue('status("active")');
   });
 
+  it("wraps a value selected outside a filter in its type filter", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.click(input);
+    await user.click(screen.getByText("active"));
+
+    expect(input).toHaveValue('status("active")');
+    // Cursor stays inside the new filter, as with in-filter insertion
+    expect(screen.getByTestId("context")).toHaveTextContent("status");
+  });
+
+  it("wraps a value after a chain operator and replaces the partial word", async () => {
+    const user = userEvent.setup();
+    render(
+      <QueryInputTestWrapper
+        suggestions={[{ value: "default", type: "zone" }]}
+      />,
+    );
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a") AND def');
+    await user.click(screen.getByRole("option", { name: /^default/ }));
+
+    expect(input).toHaveValue('status("a") AND zone("default")');
+  });
+
+  it("wraps a value with an open fuzzy string in its type filter", async () => {
+    const user = userEvent.setup();
+    render(
+      <QueryInputTestWrapper
+        suggestions={[{ value: "default", type: "zone" }]}
+      />,
+    );
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, '"de');
+    await user.click(screen.getByRole("option", { name: /^default/ }));
+
+    expect(input).toHaveValue('zone("default")');
+  });
+
   it("escapes quotes in inserted values", async () => {
     const user = userEvent.setup();
     render(
@@ -471,7 +517,7 @@ describe("QueryInput", () => {
 
   it("replaces the whole string around the cursor and keeps later terms", async () => {
     const user = userEvent.setup();
-    const initialSearch = 'status("de") zone("x")';
+    const initialSearch = 'status("de") AND zone("x")';
     render(<QueryInputTestWrapper initialSearch={initialSearch} />);
 
     const input = screen.getByRole("searchbox");
@@ -484,7 +530,7 @@ describe("QueryInput", () => {
 
     await user.click(screen.getByText("active"));
 
-    expect(input).toHaveValue('status("active") zone("x")');
+    expect(input).toHaveValue('status("active") AND zone("x")');
   });
 
   it("does not duplicate an existing closing parenthesis", async () => {
@@ -529,12 +575,222 @@ describe("QueryInput", () => {
     expect(screen.getByTestId("token")).toBeEmptyDOMElement();
   });
 
+  it("does not suggest binary operators before a term is complete", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.click(input);
+    expect(screen.queryByRole("option", { name: /^OR/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /^AND/ })).toBeNull();
+
+    await user.type(input, 'status("a") OR ');
+    expect(screen.queryByRole("option", { name: /^OR/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /^AND/ })).toBeNull();
+  });
+
+  it("suggests only chain operators after a complete term", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper initialSearch='status("a")' />);
+
+    const input = screen.getByRole("searchbox");
+    await user.click(input);
+    await user.keyboard("{End} ");
+
+    // Terms cannot follow without an explicit operator, and NOT only starts
+    // a term, so the chain operators are the only suggestions
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["ANDoperator", "ORoperator"]);
+  });
+
+  it("does not suggest NOT directly after NOT", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, "NOT ");
+    expect(screen.queryByRole("option", { name: /^NOT/ })).toBeNull();
+    expect(screen.getByRole("option", { name: /^active/ })).toBeInTheDocument();
+
+    await user.type(input, "N");
+    expect(screen.queryByRole("option", { name: /^NOT/ })).toBeNull();
+  });
+
+  it("suggests comparison operators but not NOT after NOT inside a filter", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, "status(NOT ");
+    await user.click(screen.getByText("Show more..."));
+
+    expect(screen.queryByRole("option", { name: /^NOT/ })).toBeNull();
+    expect(
+      screen.getByRole("option", { name: /^CONTAINS/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("inserts an explicit AND between terms that still parses", async () => {
+    const user = userEvent.setup();
+    render(
+      <QueryInputTestWrapper
+        suggestions={[{ value: "zone", type: "filter" }]}
+      />,
+    );
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a") A');
+    await user.click(screen.getByRole("option", { name: /^AND/ }));
+    await user.click(screen.getByRole("option", { name: /^zone/ }));
+
+    expect(input).toHaveValue('status("a") AND zone(');
+    expect(screen.getByTestId("context")).toHaveTextContent("zone");
+  });
+
+  it("suggests NOT after a binary operator", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a") OR ');
+    await user.click(screen.getByText("Show more..."));
+
+    expect(screen.getByRole("option", { name: /^NOT/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /^OR/ })).toBeNull();
+  });
+
+  it("suggests unary and comparison operators after data at the start of a filter value", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, "status(");
+    await user.click(screen.getByText("Show more..."));
+
+    const labels = screen
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    expect(labels.slice(0, 5)).toEqual([
+      "activestatus",
+      "inactivestatus",
+      "pendingstatus",
+      "status()filter",
+      "created()filter",
+    ]);
+    expect(labels.slice(5)).toEqual([
+      "NOToperator",
+      "CONTAINSoperator",
+      "STARTS WITHoperator",
+      "ENDS WITHoperator",
+      "ABOVEoperator",
+      "BELOWoperator",
+      "AT LEASToperator",
+      "AT MOSToperator",
+    ]);
+  });
+
+  it("suggests only operators after a complete value inside a filter", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a" ');
+
+    const options = screen.getAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([
+      "ANDoperator",
+      "ORoperator",
+    ]);
+  });
+
+  it("filters operators by the partial token", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a") o');
+
+    expect(screen.getByRole("option", { name: /^OR/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /^AND/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /^NOT/ })).toBeNull();
+  });
+
+  it("completes a multi-word operator across the space", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, "memory(AT L");
+
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["AT LEASToperator"]);
+    await user.click(screen.getByRole("option", { name: /^AT LEAST/ }));
+
+    expect(input).toHaveValue("memory(AT LEAST ");
+    expect(screen.getByTestId("context")).toHaveTextContent("memory");
+  });
+
+  it("still suggests a fully typed operator with different case", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, "not");
+
+    // Only the operator is offered; a term would be glued onto the word
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["NOToperator"]);
+    await user.click(screen.getByRole("option", { name: /^NOT/ }));
+
+    expect(input).toHaveValue("NOT ");
+  });
+
+  it("normalizes a fully typed chain operator with different case", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a") or');
+    await user.click(screen.getByRole("option", { name: /^OR/ }));
+
+    expect(input).toHaveValue('status("a") OR ');
+  });
+
+  it("hides an operator once it is typed exactly", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a") OR');
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    await user.clear(input);
+    await user.type(input, "NOT");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("completes a partial operator and keeps suggestions open", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+
+    const input = screen.getByRole("searchbox");
+    await user.type(input, 'status("a") O');
+    await user.click(screen.getByRole("option", { name: /^OR/ }));
+
+    expect(input).toHaveValue('status("a") OR ');
+    expect(screen.getByTestId("token")).toBeEmptyDOMElement();
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
   it("updates context/token on cursor movement", async () => {
     const user = userEvent.setup();
     render(
       <QueryInput
         {...defaultProps}
-        search='status("active") created("test")'
+        search='status("active") AND created("test")'
       />,
     );
 
@@ -558,16 +814,6 @@ describe("QueryInput", () => {
     await user.click(input);
 
     expect(screen.getByText("Loading...")).toBeInTheDocument();
-  });
-
-  it("handles empty suggestions array", async () => {
-    const user = userEvent.setup();
-    render(<QueryInput {...defaultProps} suggestions={[]} />);
-
-    const input = screen.getByRole("searchbox");
-    await user.click(input);
-
-    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
   it("handles disabled suggestions", async () => {
@@ -634,7 +880,7 @@ describe("QueryInput", () => {
     const input = screen.getByRole("searchbox");
 
     // Type rapidly
-    await user.type(input, 'status("active") created("test")');
+    await user.type(input, 'status("active") AND created("test")');
 
     expect(mockSetSearch).toHaveBeenCalled();
     expect(mockSetContext).toHaveBeenCalled();
