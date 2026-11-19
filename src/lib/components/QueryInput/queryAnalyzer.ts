@@ -320,8 +320,14 @@ export const analyzeQuery = (
 
   // A word being typed has already reset isInChain, so use the chain state
   // from where that word starts (the token may exclude a whole operator word)
+  const quantityBeforeCursor =
+    /(?:^|[\s(])[+-]?\d+(?:\.\d+)?(?:\s*(?:GHz|MHz|kHz|Hz|TiB|GiB|MiB|KiB|TB|GB|MB|KB|B|Gbps|Mbps))?\s+$/.test(
+      inputUntilCursor.slice(0, tokenStart),
+    );
   const isTokenInChain =
-    !isInString && (wordStart >= 0 ? isInChainBeforeWord : isInChain);
+    !isInString &&
+    (quantityBeforeCursor ||
+      (wordStart >= 0 ? isInChainBeforeWord : isInChain));
 
   // Operators are probed against the grammar with stand-in operands, so the
   // grammar decides which operators fit; chain operators are only offered
@@ -415,9 +421,20 @@ export const replaceQueryToken = (
 
   // Outside a filter, the suggestion type names the filter to wrap the value
   // in; inside one, the value is inserted directly and the filter is closed
-  const value = JSON.stringify(selected.value);
+  const value =
+    selected.kind === "quantity"
+      ? selected.value
+      : JSON.stringify(selected.value);
   const opening = context === "" ? `${selected.type}(` : "";
-  const closing = context === "" || input[tokenEnd] !== ")" ? ")" : "";
+  const enclosing = segmentQuery(input)
+    .units.filter(
+      (unit) =>
+        unit.kind === "filter" &&
+        unit.anchors[0] <= tokenStart &&
+        tokenStart < unit.end,
+    )
+    .sort((a, b) => a.end - a.start - (b.end - b.start))[0];
+  const closing = context === "" || enclosing?.anchors.length !== 2 ? ")" : "";
 
   return {
     value:
@@ -436,7 +453,7 @@ export type QueryToken = { text: string; kind: QueryTokenKind };
 
 // Whole operator phrases only; the lookahead keeps "ANDROID" a plain word
 const OPERATOR_PHRASE =
-  /^(?:NOT|AND|OR|CONTAINS|STARTS WITH|ENDS WITH|ABOVE|BELOW|AT LEAST|AT MOST)(?=[\s()"]|$)/i;
+  /^(?:NOT|AND|OR|CONTAINS|STARTS WITH|ENDS WITH|ABOVE|BELOW|AT LEAST|AT MOST)(?=[\s()"]|$)/;
 
 // Splits the input into highlightable tokens. The texts concatenate back to
 // the exact input, so a layer drawn behind the text lines up with it.
@@ -479,7 +496,11 @@ export const tokenizeQuery = (input: string): QueryToken[] => {
         kind = "operator";
       } else {
         while (end < input.length && !TOKEN_BOUNDARY.test(input[end])) end++;
-        if (input[end] === "(") kind = "filter";
+        if (
+          input[end] === "(" &&
+          /^[a-z_][a-z0-9_-]*$/.test(input.slice(index, end))
+        )
+          kind = "filter";
         else if (openGroups.includes(true)) kind = "value";
       }
     }

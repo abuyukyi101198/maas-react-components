@@ -6,6 +6,7 @@ import {
   KeyboardEvent,
   FormEvent,
   ClipboardEvent,
+  useId,
   useMemo,
   useCallback,
   ReactElement,
@@ -15,10 +16,18 @@ import {
   SetStateAction,
 } from "react";
 
-import { Icon, Spinner } from "@canonical/react-components";
+import { Button, Icon, Spinner } from "@canonical/react-components";
+import { KeyboardKey, KeyboardKeys } from "@canonical/react-ds-global";
 import classNames from "classnames";
 
 import "./QueryInput.scss";
+import {
+  fieldsAtContext,
+  QueryExpression,
+  QueryField,
+  validateQuery,
+} from "./queryModel";
+
 import {
   analyzeQuery,
   QuerySegment,
@@ -39,6 +48,7 @@ const MODIFIER_KEYS = ["Shift", "Control", "Alt", "Meta"];
 export type Suggestion = {
   value: string;
   type: string;
+  kind?: "quantity";
   disabled?: boolean;
 };
 
@@ -51,9 +61,17 @@ type QueryInputProps = {
   setToken: Dispatch<SetStateAction<string>>;
   suggestions: Suggestion[];
   isLoading?: boolean;
+  fields?: readonly QueryField[];
+  suggestionError?: string;
+  noMatchingValues?: boolean;
+  onRetry?: () => void;
+  onClear?: () => void;
   placeholder?: string;
-  onSubmit?: (search: string) => void;
-} & DetailedHTMLProps<HTMLAttributes<HTMLDivElement>, HTMLDivElement>;
+  onSubmit?: (search: string, expression: QueryExpression) => void;
+} & Omit<
+  DetailedHTMLProps<HTMLAttributes<HTMLDivElement>, HTMLDivElement>,
+  "onSubmit"
+>;
 
 type SuggestionState = {
   isVisible: boolean;
@@ -194,6 +212,15 @@ const withTypedCharacter = (
   cursor: number,
   previous: string,
 ): string => {
+  if (typed.length === previous.length + 1 && typed[cursor - 1] === '"') {
+    const before = typed.slice(0, cursor - 1);
+    const escapes = before.match(/\\+$/)?.[0].length ?? 0;
+    if (escapes % 2 === 0) {
+      const inString = analyzeQuery(previous, cursor - 1).isInString;
+      if (!inString) return before + '""' + typed.slice(cursor);
+      if (previous[cursor - 1] === '"') return previous;
+    }
+  }
   if (isDeletedBeforeFilter(typed, cursor, previous)) return previous;
   if (isTypedBeforeFilter(typed, cursor, previous)) {
     return typed.slice(0, cursor) + " " + typed.slice(cursor);
@@ -212,7 +239,7 @@ const withTypedCharacter = (
 const renderEditor = (
   root: HTMLElement,
   value: string,
-  highlight: QueryUnit | null,
+  _highlight: QueryUnit | null,
 ) => {
   const { segments, units } = segmentQuery(value);
   const nodes: Node[] = [];
@@ -370,8 +397,13 @@ const redraw = (
  * @param {setToken} [props.setToken] - Partial token string for autocomplete
  * @param {suggestions} [props.suggestions] - Context-aware suggestions
  * @param {isLoading} [props.isLoading] - Loading suggestion state boolean
+ * @param {fields} [props.fields] - Entity filter catalogue for semantic validation and operators
+ * @param {suggestionError} [props.suggestionError] - Value lookup failure, shown alongside local suggestions
+ * @param {noMatchingValues} [props.noMatchingValues] - Successful lookup with no values
+ * @param {onRetry} [props.onRetry] - Retries a failed value lookup
+ * @param {onClear} [props.onClear] - Clears the applied search; undo only restores the draft
  * @param {placeholder} [props.placeholder] - Search field placeholder text
- * @param {onSubmit} [props.onSubmit] - Called with the query on Ctrl+Enter or Submit
+ * @param {onSubmit} [props.onSubmit] - Called with valid DSL and normalized AST on Ctrl/Cmd+Enter or Submit
  *
  * @returns {ReactElement} - The rendered query input component
  *
@@ -393,10 +425,26 @@ export const QueryInput = ({
   setToken,
   suggestions,
   isLoading = false,
+  fields,
+  suggestionError,
+  noMatchingValues = false,
+  onRetry,
+  onClear,
   placeholder,
   onSubmit,
   ...props
 }: QueryInputProps): ReactElement => {
+  const [submitModifier, setSubmitModifier] = useState<"ctrl" | "cmd">("ctrl");
+  useEffect(() => {
+    if (/Mac|iPhone|iPad|iPod/.test(navigator.platform))
+      setSubmitModifier("cmd");
+  }, []);
+  const id = useId();
+  const validation = useMemo(
+    () => validateQuery(search, fields),
+    [search, fields],
+  );
+  const canSubmit = !disabled && validation.expression !== null;
   const [suggestionState, setSuggestionState] = useState<SuggestionState>({
     isVisible: false,
     highlightedIndex: -1,
@@ -411,27 +459,73 @@ export const QueryInput = ({
   const highlightRef = useRef<QueryUnit | null>(null);
   // Caret offset to restore after the next redraw
   const pendingCursorRef = useRef<number | null>(null);
+  const historyRef = useRef<{
+    past: { value: string; cursor: number }[];
+    future: { value: string; cursor: number }[];
+  }>({ past: [], future: [] });
+  const recordEdit = useCallback(
+    (value: string) => {
+      if (value === search) return;
+      historyRef.current.past.push({
+        value: search,
+        cursor: suggestionState.cursorPosition,
+      });
+      historyRef.current.future = [];
+    },
+    [search, suggestionState.cursorPosition],
+  );
 
   // Operators come from the grammar, not the data layer. They lead after a
   // complete term and trail the data at the start of a term; data terms the
   // grammar cannot accept without an operator are dropped.
-  const { operators, acceptsTerm, isTokenInChain, overwritesUnit } = useMemo(
+  const {
+    operators,
+    acceptsTerm,
+    isTokenInChain,
+    overwritesUnit,
+    context,
+    isInString,
+  } = useMemo(
     () => analyzeQuery(search, suggestionState.cursorPosition),
     [search, suggestionState.cursorPosition],
   );
-  const isSuggesting =
-    !disabled && suggestionState.isVisible && !overwritesUnit;
+  const canSuggest = !disabled && suggestionState.isVisible && !overwritesUnit;
   const units = useMemo(() => segmentQuery(search).units, [search]);
-  const allSuggestions = useMemo(() => {
-    const operatorSuggestions = operators.map((value) => ({
+  const allSuggestions = useMemo<Suggestion[]>(() => {
+    const field = fields ? fieldsAtContext(fields, context) : undefined;
+    const numeric = field?.type === "quantity";
+    const allowedOperators = !fields
+      ? operators
+      : operators.filter(
+          (operator) =>
+            ["AND", "OR", "NOT"].includes(operator) ||
+            (numeric
+              ? ["ABOVE", "BELOW", "AT LEAST", "AT MOST"].includes(operator)
+              : ["CONTAINS", "STARTS WITH", "ENDS WITH"].includes(operator)),
+        );
+    const operatorSuggestions = allowedOperators.map((value) => ({
       value,
       type: "operator",
     }));
-    const termSuggestions = acceptsTerm ? suggestions : [];
+    const termSuggestions = acceptsTerm
+      ? suggestions.filter((item) =>
+          item.type === "filter" ? !isInString : !isLoading && !suggestionError,
+        )
+      : [];
     return isTokenInChain
       ? [...operatorSuggestions, ...termSuggestions]
       : [...termSuggestions, ...operatorSuggestions];
-  }, [operators, acceptsTerm, isTokenInChain, suggestions]);
+  }, [
+    operators,
+    acceptsTerm,
+    isTokenInChain,
+    suggestions,
+    fields,
+    context,
+    isLoading,
+    suggestionError,
+    isInString,
+  ]);
 
   const visibleSuggestions = useMemo(() => {
     const maxToShow = suggestionState.showingMore
@@ -445,6 +539,12 @@ export const QueryInput = ({
       ? [...capped, { value: "Show more...", type: "more" }]
       : capped;
   }, [allSuggestions, suggestionState.showingMore]);
+  const isSuggesting =
+    canSuggest &&
+    (allSuggestions.length > 0 ||
+      isLoading ||
+      Boolean(suggestionError) ||
+      noMatchingValues);
 
   const updateSuggestionState = useCallback(
     (
@@ -461,9 +561,29 @@ export const QueryInput = ({
     [],
   );
 
+  useEffect(() => {
+    if (
+      suggestionState.highlightedIndex >= visibleSuggestions.length ||
+      (isSuggesting &&
+        suggestionState.highlightedIndex < 0 &&
+        visibleSuggestions.length > 0)
+    ) {
+      updateSuggestionState({
+        highlightedIndex: visibleSuggestions.length ? 0 : -1,
+      });
+    }
+  }, [
+    visibleSuggestions.length,
+    suggestionState.highlightedIndex,
+    updateSuggestionState,
+    isSuggesting,
+  ]);
+
   const handleClickOutside = useCallback(
     (e: MouseEvent) => {
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        highlightRef.current = null;
+        if (editorRef.current) markSelectedUnits(editorRef.current, null);
         updateSuggestionState({
           isVisible: false,
           highlightedIndex: -1,
@@ -499,6 +619,7 @@ export const QueryInput = ({
   // Sets a new query string, or redraws in place when it is unchanged
   const commitQuery = useCallback(
     (value: string, cursorPosition: number) => {
+      recordEdit(value);
       if (value === search) {
         if (editorRef.current) {
           redraw(editorRef.current, value, null, cursorPosition);
@@ -517,13 +638,20 @@ export const QueryInput = ({
         cursorPosition,
       });
     },
-    [search, setSearch, setContext, setToken, updateSuggestionState],
+    [
+      search,
+      setSearch,
+      setContext,
+      setToken,
+      updateSuggestionState,
+      recordEdit,
+    ],
   );
 
   const selectSuggestion = useCallback(
     (index: number) => {
       const selected = visibleSuggestions[index];
-      if (!selected) return;
+      if (!selected || selected.disabled) return;
 
       if (selected.type === "more") {
         updateSuggestionState({ showingMore: true });
@@ -536,6 +664,7 @@ export const QueryInput = ({
         analysis,
         selected,
       );
+      recordEdit(newValue);
 
       const { context: newContext, token: newToken } = analyzeQuery(
         newValue,
@@ -570,6 +699,7 @@ export const QueryInput = ({
       setToken,
       setSearch,
       updateSuggestionState,
+      recordEdit,
     ],
   );
 
@@ -588,13 +718,17 @@ export const QueryInput = ({
       ...prev,
       isVisible: !analysis.shouldHideSuggestions,
       cursorPosition,
+      highlightedIndex: 0,
     }));
   }, [search, setContext, setToken, updateSuggestionState]);
 
   const handleClear = useCallback(() => {
+    recordEdit("");
+    highlightRef.current = null;
     setSearch("");
     setContext("");
     setToken("");
+    onClear?.();
     editorRef.current?.focus();
     updateSuggestionState({
       isVisible: false,
@@ -602,17 +736,85 @@ export const QueryInput = ({
       showingMore: false,
       cursorPosition: 0,
     });
-  }, [setSearch, setContext, setToken, updateSuggestionState]);
+  }, [
+    setSearch,
+    setContext,
+    setToken,
+    updateSuggestionState,
+    recordEdit,
+    onClear,
+  ]);
 
   const handleSubmit = useCallback(() => {
-    onSubmit?.(search);
+    if (!canSubmit || !validation.expression) return;
+    onSubmit?.(search, validation.expression);
     updateSuggestionState({ isVisible: false, highlightedIndex: -1 });
-  }, [onSubmit, search, updateSuggestionState]);
+  }, [onSubmit, search, updateSuggestionState, canSubmit, validation]);
+
+  const restoreHistory = useCallback(
+    (redo: boolean) => {
+      const history = historyRef.current;
+      const snapshot = (redo ? history.future : history.past).pop();
+      if (!snapshot) return;
+      (redo ? history.past : history.future).push({
+        value: search,
+        cursor: suggestionState.cursorPosition,
+      });
+      highlightRef.current = null;
+      pendingCursorRef.current = snapshot.cursor;
+      setSearch(snapshot.value);
+      const analysis = analyzeQuery(snapshot.value, snapshot.cursor);
+      setContext(analysis.context);
+      setToken(analysis.token);
+      updateSuggestionState({
+        cursorPosition: snapshot.cursor,
+        isVisible: false,
+        showingMore: false,
+      });
+    },
+    [
+      search,
+      suggestionState.cursorPosition,
+      setSearch,
+      setContext,
+      setToken,
+      updateSuggestionState,
+    ],
+  );
+
+  useEffect(() => {
+    const root = editorRef.current;
+    const beforeInput = (event: InputEvent) => {
+      if (
+        event.inputType === "historyUndo" ||
+        event.inputType === "historyRedo"
+      ) {
+        event.preventDefault();
+        if (!disabled) restoreHistory(event.inputType === "historyRedo");
+      } else if (
+        event.inputType === "insertParagraph" ||
+        event.inputType === "insertLineBreak"
+      ) {
+        event.preventDefault();
+      }
+    };
+    root?.addEventListener("beforeinput", beforeInput);
+    return () => root?.removeEventListener("beforeinput", beforeInput);
+  }, [restoreHistory, disabled]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
       const { key } = e;
-      if (search !== "" && key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      if (disabled) return;
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        (key.toLowerCase() === "z" || key.toLowerCase() === "y")
+      ) {
+        e.preventDefault();
+        restoreHistory(key.toLowerCase() === "y" || e.shiftKey);
+        return;
+      }
+      if (key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         handleSubmit();
         return;
@@ -622,12 +824,12 @@ export const QueryInput = ({
         const suggestionCount = visibleSuggestions.length;
 
         switch (key) {
-          case "Tab":
           case "ArrowDown":
             e.preventDefault();
             updateSuggestionState({
-              highlightedIndex:
-                (suggestionState.highlightedIndex + 1) % suggestionCount,
+              highlightedIndex: suggestionCount
+                ? (suggestionState.highlightedIndex + 1) % suggestionCount
+                : -1,
             });
             return;
 
@@ -749,6 +951,11 @@ export const QueryInput = ({
       updateCursorPosition,
       handleSubmit,
       handleClear,
+      disabled,
+      setSearch,
+      setContext,
+      setToken,
+      restoreHistory,
     ],
   );
 
@@ -810,6 +1017,29 @@ export const QueryInput = ({
     [search, commitQuery],
   );
 
+  const handleCopy = useCallback(
+    (e: ClipboardEvent<HTMLDivElement>) => {
+      const root = e.currentTarget;
+      const selection = document.getSelection();
+      if (!selection || !selection.rangeCount) return;
+      const range = selection.getRangeAt(0);
+      if (
+        !root.contains(range.startContainer) ||
+        !root.contains(range.endContainer)
+      )
+        return;
+      e.preventDefault();
+      e.clipboardData.setData(
+        "text/plain",
+        search.slice(
+          offsetOf(root, range.startContainer, range.startOffset),
+          offsetOf(root, range.endContainer, range.endOffset),
+        ),
+      );
+    },
+    [search],
+  );
+
   const handleClick = useCallback(() => {
     const root = editorRef.current;
     if (root && highlightRef.current) {
@@ -846,45 +1076,102 @@ export const QueryInput = ({
         <div
           className="p-query-input__field"
           ref={editorRef}
-          role="searchbox"
-          id="query-input"
+          role="combobox"
+          tabIndex={disabled ? -1 : 0}
+          id={id}
           contentEditable={!disabled}
           spellCheck={false}
           data-placeholder={placeholder}
           aria-label={placeholder ?? "Search"}
           aria-disabled={disabled}
-          aria-multiline={false}
           aria-expanded={isSuggesting}
           aria-haspopup="listbox"
-          aria-owns="query-suggestions"
+          aria-controls={`${id}-suggestions`}
+          aria-activedescendant={
+            isSuggesting && visibleSuggestions[suggestionState.highlightedIndex]
+              ? `${id}-option-${suggestionState.highlightedIndex}`
+              : undefined
+          }
+          aria-invalid={Boolean(validation.error)}
+          aria-describedby={validation.error ? `${id}-error` : undefined}
           onFocus={handleFocus}
           onInput={handleInput}
           onKeyDown={handleKeyDown}
           onKeyUp={handleKeyUp}
           onClick={handleClick}
           onPaste={handlePaste}
+          onCopy={handleCopy}
         />
         <div className="p-query-input__actions">
-          <Icon name="search" />
-        </div>
-        {isSuggesting && allSuggestions.length > 0 && (
-          <ul
-            className="p-query-input__list"
-            ref={listRef}
-            id="query-suggestions"
-            role="listbox"
-            aria-label="Search suggestions"
-            // Keep focus on the field so the post-selection refocus does not
-            // fire a focus event that reopens the list.
-            onMouseDown={(e) => e.preventDefault()}
+          <Button
+            type="button"
+            appearance="positive"
+            small
+            dense
+            disabled={!canSubmit}
+            onClick={handleSubmit}
+            aria-keyshortcuts="Control+Enter Meta+Enter"
           >
-            {isLoading ? (
-              <div className="p-query-input__loading">
-                <Spinner text="Loading..." />
-              </div>
-            ) : (
-              visibleSuggestions.map((item, index) => (
+            Submit
+            <KeyboardKeys
+              className="p-query-input__shortcut"
+              aria-hidden="true"
+            >
+              <KeyboardKey keyValue={submitModifier} />
+              <KeyboardKey keyValue="enter" />
+            </KeyboardKeys>
+            {validation.error && <Icon name="error" />}
+          </Button>
+          {validation.error && (
+            <Button
+              type="button"
+              appearance="base"
+              small
+              dense
+              className="p-query-input__error"
+              aria-label={`Query error: ${validation.error}`}
+              aria-describedby={`${id}-error`}
+            >
+              <Icon name="error" />
+              <span role="tooltip" id={`${id}-error`}>
+                {validation.error}
+              </span>
+            </Button>
+          )}
+          <Button
+            type="button"
+            appearance="base"
+            small
+            dense
+            disabled={disabled}
+            onClick={handleClear}
+            aria-keyshortcuts={isSuggesting ? undefined : "Escape"}
+            title="Escape closes suggestions first, then clears the query."
+          >
+            Clear
+            <KeyboardKeys
+              className="p-query-input__shortcut"
+              aria-hidden="true"
+            >
+              <KeyboardKey keyValue="escape" />
+            </KeyboardKeys>
+          </Button>
+        </div>
+        {isSuggesting && (
+          <div className="p-query-input__suggestions">
+            <ul
+              className="p-query-input__list"
+              ref={listRef}
+              id={`${id}-suggestions`}
+              role="listbox"
+              aria-label="Search suggestions"
+              // Keep focus on the field so the post-selection refocus does not
+              // fire a focus event that reopens the list.
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              {visibleSuggestions.map((item, index) => (
                 <li
+                  id={`${id}-option-${index}`}
                   key={`${item.value}-${index}`}
                   className={classNames("p-query-input__item", {
                     highlight: index === suggestionState.highlightedIndex,
@@ -894,6 +1181,7 @@ export const QueryInput = ({
                   onMouseEnter={() => handleMouseEnter(index)}
                   role="option"
                   aria-selected={index === suggestionState.highlightedIndex}
+                  aria-disabled={item.disabled}
                   tabIndex={-1}
                 >
                   <span className="p-query-input__item-label">
@@ -922,9 +1210,25 @@ export const QueryInput = ({
                     </span>
                   )}
                 </li>
-              ))
+              ))}
+            </ul>
+            {isLoading && (
+              <div role="status">
+                <Spinner text="Loading values..." />
+              </div>
             )}
-          </ul>
+            {!isLoading && suggestionError && (
+              <div role="alert">
+                {suggestionError}{" "}
+                <Button type="button" small dense onClick={onRetry}>
+                  Retry
+                </Button>
+              </div>
+            )}
+            {!isLoading && !suggestionError && noMatchingValues && (
+              <div role="status">No matching values</div>
+            )}
+          </div>
         )}
       </div>
     </div>

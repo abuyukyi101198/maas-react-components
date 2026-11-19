@@ -1,4 +1,4 @@
-import { AriaAttributes, ChangeEvent, FC, useState } from "react";
+import { AriaAttributes, ChangeEvent, FC, useEffect, useState } from "react";
 
 import "./Pagination.scss";
 import { Button, Icon, Input } from "@canonical/react-components";
@@ -87,6 +87,11 @@ export const PaginationContainer: FC<PaginationContainerProps> = ({
 }: PaginationContainerProps) => {
   const [pageNumber, setPageNumber] = useState<number | undefined>(currentPage);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setPageNumber(currentPage);
+    setError("");
+  }, [currentPage]);
 
   const onInputBlur = () => {
     setPageNumber(currentPage);

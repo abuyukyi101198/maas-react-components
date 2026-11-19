@@ -14,7 +14,36 @@ it("renders without crashing", () => {
     />,
   );
 
-  expect(screen.getByRole("navigation", { name: "pagination"})).toBeInTheDocument();
+  expect(
+    screen.getByRole("navigation", { name: "pagination" }),
+  ).toBeInTheDocument();
+});
+
+it("synchronizes the displayed page and clears errors when the parent resets pagination", () => {
+  const paginate = vi.fn();
+  const { rerender } = render(
+    <PaginationContainer
+      currentPage={2}
+      disabled={false}
+      paginate={paginate}
+      totalPages={3}
+    />,
+  );
+  fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "9" } });
+  expect(screen.getByText("9 is not a valid page number.")).toBeInTheDocument();
+  rerender(
+    <PaginationContainer
+      currentPage={1}
+      disabled={false}
+      paginate={paginate}
+      totalPages={3}
+    />,
+  );
+  expect(screen.getByRole("spinbutton")).toHaveValue(1);
+  expect(
+    screen.queryByText("9 is not a valid page number."),
+  ).not.toBeInTheDocument();
+  expect(paginate).not.toHaveBeenCalled();
 });
 
 it("calls the 'paginate' function when the 'Next page' button is clicked", async () => {
@@ -89,7 +118,9 @@ it("displays an error if an invalid page number is entered", () => {
   fireEvent.change(pageInput, { target: { value: "12" } });
 
   expect(paginate).not.toHaveBeenCalled();
-  expect(screen.getByText("12 is not a valid page number.")).toBeInTheDocument();
+  expect(
+    screen.getByText("12 is not a valid page number."),
+  ).toBeInTheDocument();
 });
 
 it("displays an error if no page number is entered", async () => {

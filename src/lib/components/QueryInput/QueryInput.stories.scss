@@ -1,0 +1,48 @@
+.query-input-demo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  height: calc(100dvh - 2rem);
+  min-height: 0;
+
+  .p-query-input__bar {
+    margin-bottom: 0;
+  }
+
+  &__results,
+  .p-generic-table,
+  .p-generic-table__table {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .p-generic-table__table tbody {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .p-generic-table__table thead,
+  .controls-bar {
+    flex-shrink: 0;
+  }
+
+  .controls-bar {
+    margin-top: 0.5rem;
+  }
+
+  &__toolbar,
+  &__group {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+  }
+
+  &__group,
+  &__group select {
+    margin-bottom: 0;
+    width: auto;
+  }
+}

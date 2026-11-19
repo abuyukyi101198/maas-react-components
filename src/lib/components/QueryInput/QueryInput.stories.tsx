@@ -1,371 +1,401 @@
-import { type CSSProperties, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { Meta, StoryObj } from "@storybook/react-vite";
-
-import { QueryInput, Suggestion } from "@/lib";
+import type { Meta, StoryObj } from "@storybook/react-vite";
 import {
-  analyzeQuery,
-  type QueryTokenKind,
-  tokenizeQuery,
-  toDottedQuery,
-} from "@/lib/components/QueryInput/queryAnalyzer";
+  QueryClient,
+  QueryClientProvider,
+  useQuery,
+} from "@tanstack/react-query";
+import type {
+  ColumnDef,
+  RowSelectionState,
+  SortingState,
+} from "@tanstack/react-table";
 
-// Machine shape from maas-ui (src/app/store/machine/types/base.ts). Nested refs
-// such as zone and pool are { id, name } objects, so their values come from
-// `.name`. A VLAN belongs to a fabric, so VLANs are nested under their fabric
-type ModelRef = { id: number; name: string };
+import { GenericTable } from "@/lib/components/GenericTable/GenericTable";
+import { QueryInput } from "@/lib/components/QueryInput/QueryInput";
+import {
+  demoFields,
+  demoMachines,
+  getDemoFilterSuggestions,
+  getDemoSuggestions,
+  listDemoMachines,
+  searchDemoMachines,
+  type DemoGroup,
+  type DemoListingRequest,
+  type DemoMachine,
+  type DemoPersona,
+  type DemoSort,
+} from "@/lib/components/QueryInput/queryDemo";
+import {
+  fieldsAtContext,
+  validateQuery,
+  type QueryExpression,
+} from "@/lib/components/QueryInput/queryModel";
 
-type FabricFixture = ModelRef & { vlans: ModelRef[] };
+import "./QueryInput.stories.scss";
 
-type MachineFixture = {
-  hostname: string;
-  status: string;
-  owner: string;
-  architecture: string;
-  pool: ModelRef;
-  zone: ModelRef;
-  fabrics: FabricFixture[];
-  spaces: string[];
+type DemoProps = {
+  delayMs: number;
+  failSuggestions: boolean;
+  failExecution: boolean;
+  persona: DemoPersona;
+  disabled?: boolean;
+  isLoading?: boolean;
 };
+type AppliedQuery = { text: string; expression: QueryExpression };
 
-const fabric0: FabricFixture = {
-  id: 0,
-  name: "fabric-0",
-  vlans: [{ id: 0, name: "default" }],
-};
-
-const fabric1: FabricFixture = {
-  id: 1,
-  name: "fabric-1",
-  vlans: [
-    { id: 1, name: "default" },
-    { id: 2, name: "mgmt" },
-  ],
-};
-
-const machines: MachineFixture[] = [
+const EMPTY_MACHINES: DemoMachine[] = [];
+const machineColumns: ColumnDef<DemoMachine, Partial<DemoMachine>>[] = [
+  { accessorKey: "hostname", header: "Hostname", enableMultiSort: false },
   {
-    hostname: "mlod2s001",
-    status: "Deployed",
-    owner: "maas",
-    architecture: "amd64/generic",
-    pool: { id: 1, name: "default" },
-    zone: { id: 1, name: "default" },
-    fabrics: [fabric0],
-    spaces: ["outer"],
+    accessorKey: "status",
+    header: "Status / architecture",
+    enableMultiSort: false,
+    cell: ({ row: { original: item } }) => (
+      <>
+        {item.status}
+        <br />
+        {item.architecture}
+      </>
+    ),
   },
   {
-    hostname: "mlod2s002",
-    status: "Ready",
-    owner: "acbuyukyilmaz",
-    architecture: "amd64/generic",
-    pool: { id: 2, name: "reserve" },
-    zone: { id: 2, name: "danger" },
-    fabrics: [fabric1],
-    spaces: ["empty"],
+    accessorKey: "pool",
+    header: "Pool / zone / owner",
+    enableSorting: false,
+    cell: ({ row: { original: item } }) => (
+      <>
+        {item.pool} / {item.zone}
+        <br />
+        Owner: {item.owner ?? "unknown"}
+      </>
+    ),
   },
   {
-    hostname: "eu6ww001",
-    status: "Deployed",
-    owner: "maas",
-    architecture: "arm64/generic",
-    pool: { id: 2, name: "reserve" },
-    zone: { id: 1, name: "default" },
-    fabrics: [fabric0, fabric1],
-    spaces: ["outer"],
+    accessorKey: "disks",
+    header: "Disks (bytes)",
+    enableSorting: false,
+    cell: ({ row: { original: item } }) =>
+      item.disks
+        .map((disk) => `${disk.name}: ${disk.size ?? "unknown"}`)
+        .join("; ") || "No disks",
+  },
+  {
+    accessorKey: "fabrics",
+    header: "Connected fabric → VLANs",
+    enableSorting: false,
+    cell: ({ row: { original: item } }) =>
+      item.fabrics
+        .map(
+          (fabric) => `${fabric.name} → ${fabric.vlans.join(", ") || "(none)"}`,
+        )
+        .join("; ") || "No connections",
   },
 ];
 
-// The field each filter's values are read from. A complex value defaults to
-// its name, so zone and pool read `.name`. A filter with a parent is suggested
-// only inside that parent
-const FILTER_FIELDS: {
-  filter: string;
-  path: string;
-  parent?: string;
-  read: (machine: MachineFixture) => string[];
-}[] = [
-  { filter: "status", path: "status", read: (m) => [m.status] },
-  { filter: "owner", path: "owner", read: (m) => [m.owner] },
-  { filter: "pool", path: "pool.name", read: (m) => [m.pool.name] },
-  { filter: "zone", path: "zone.name", read: (m) => [m.zone.name] },
-  {
-    filter: "architecture",
-    path: "architecture",
-    read: (m) => [m.architecture],
-  },
-  {
-    filter: "fabric",
-    path: "fabrics.name",
-    read: (m) => m.fabrics.map((f) => f.name),
-  },
-  {
-    filter: "vlan",
-    path: "fabrics.vlans.name",
-    parent: "fabric",
-    read: (m) => m.fabrics.flatMap((f) => f.vlans.map((v) => v.name)),
-  },
-  { filter: "space", path: "spaces", read: (m) => m.spaces },
-];
+const DemoHarness = ({
+  delayMs,
+  failSuggestions,
+  failExecution,
+  persona,
+  disabled,
+  isLoading,
+}: DemoProps) => {
+  const resultsRef = useRef<HTMLElement>(null);
+  const [search, setSearch] = useState("");
+  const [context, setContext] = useState("");
+  const [token, setToken] = useState("");
+  const [applied, setApplied] = useState<AppliedQuery | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(5);
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "hostname", desc: false },
+  ]);
+  const sortField = sorting[0]?.id === "status" ? "status" : "hostname";
+  const sort: DemoSort = sorting[0]?.desc ? `-${sortField}` : sortField;
+  const [group, setGroup] = useState<DemoGroup>("none");
+  const [selected, setSelected] = useState<RowSelectionState>({});
+  useEffect(() => setPage(1), [persona]);
 
-const rootFilterNames = FILTER_FIELDS.filter((f) => f.parent === undefined).map(
-  (f) => f.filter,
-);
+  const validation = validateQuery(search, demoFields);
+  const activeField = fieldsAtContext(demoFields, context);
+  const contextParts = context.split(".");
+  const suggestionRequest = {
+    entity: "machines" as const,
+    persona,
+    filter: activeField?.name ?? "",
+    ...(contextParts.length === 2 ? { parent: contextParts[0] } : {}),
+    q: token,
+    limit: 15,
+  };
+  const values = useQuery({
+    queryKey: [
+      "query-demo",
+      "suggestions",
+      suggestionRequest,
+      delayMs,
+      failSuggestions,
+    ],
+    queryFn: ({ signal }) =>
+      getDemoSuggestions(suggestionRequest, {
+        delayMs,
+        fail: failSuggestions,
+        signal,
+      }),
+    enabled: Boolean(activeField),
+    retry: false,
+    gcTime: 30000,
+  });
+  const suggestions = [
+    ...getDemoFilterSuggestions(context, token),
+    ...(activeField && !values.isError
+      ? (values.data?.suggestions ?? []).map((value) => ({
+          value,
+          type: activeField.name,
+          ...(activeField.type === "quantity"
+            ? { kind: "quantity" as const }
+            : {}),
+        }))
+      : []),
+  ];
 
-const subFilterNames = (parent: string) =>
-  FILTER_FIELDS.filter((f) => f.parent === parent).map((f) => f.filter);
+  const listingRequest: DemoListingRequest = {
+    entity: "machines",
+    persona,
+    page,
+    pageSize,
+    sort,
+    group,
+  };
+  const searchRequest = applied
+    ? { ...listingRequest, query: applied.expression }
+    : null;
+  // Switching keys releases the previous observer; disabling it would retain its cache.
+  const results = useQuery({
+    queryKey: [
+      "query-demo",
+      applied ? "search" : "listing",
+      searchRequest ?? listingRequest,
+      delayMs,
+      failExecution,
+    ],
+    queryFn: ({ signal }) =>
+      searchRequest
+        ? searchDemoMachines(searchRequest, {
+            delayMs,
+            fail: failExecution,
+            signal,
+          })
+        : listDemoMachines(listingRequest, {
+            delayMs,
+            fail: failExecution,
+            signal,
+          }),
+    gcTime: applied ? 30000 : 300000,
+    retry: false,
+  });
 
-const machineSuggestions: Suggestion[] = FILTER_FIELDS.flatMap(
-  ({ filter, read }) => [
-    { value: filter, type: "filter" },
-    ...[...new Set(machines.flatMap(read))].map((value) => ({
-      value,
-      type: filter,
-    })),
-  ],
-);
+  const submit = (text: string, expression: QueryExpression) => {
+    // Validate the entire submitted text, never the analyzer's incomplete-token prefix.
+    if (!validateQuery(text, demoFields).expression) return;
+    setApplied({ text, expression });
+    setPage(1);
+  };
 
-const meta: Meta<typeof QueryInput> = {
-  title: "Components/QueryInput",
-  component: QueryInput,
-  parameters: {
-    docs: {
-      description: {
-        component:
-          "QueryInput is a search field component with externally controlled " +
-          "assistive suggestion and insertion features. It's designed to construct " +
-          "queries using autocomplete and suggestion endpoints managed by external queries.",
-      },
-    },
-  },
-  tags: ["autodocs"],
-  args: {
-    suggestions: machineSuggestions,
-  },
-  argTypes: {
-    disabled: {
-      description: "Determines the disabled state",
-      control: { type: "boolean", default: false },
-      table: {
-        type: { summary: "boolean" },
-        defaultValue: { summary: "false" },
-      },
-    },
-    search: {
-      description:
-        "Externally controlled search query string. Must be passed in to the component for token detection",
-      control: false,
-      table: {
-        type: { summary: "string" },
-        required: true,
-      },
-    },
-    setSearch: {
-      description: "State setter function for updating search query string",
-      control: false,
-      table: {
-        type: { summary: "Dispatch<SetStateAction<string>>" },
-        required: true,
-      },
-    },
-    setContext: {
-      description: "State setter function for updating context string",
-      control: false,
-      table: {
-        type: { summary: "Dispatch<SetStateAction<string>>" },
-        required: true,
-      },
-    },
-    setToken: {
-      description:
-        "State setter function for updating currently editing token string",
-      control: false,
-      table: {
-        type: { summary: "Dispatch<SetStateAction<string>>" },
-        required: true,
-      },
-    },
-    suggestions: {
-      description: "Externally controlled suggestion array",
-      control: false,
-      table: {
-        type: { summary: "Suggestion[]" },
-        required: true,
-      },
-    },
-    isLoading: {
-      description: "Determines the suggestion loading state",
-      control: { type: "boolean", default: false },
-      table: {
-        type: { summary: "boolean" },
-        defaultValue: { summary: "false" },
-      },
-    },
-    placeholder: {
-      description: "Search field placeholder text",
-      control: { type: "text" },
-      table: {
-        type: { summary: "string" },
-      },
-    },
-  },
-};
-
-export default meta;
-
-type Story = StoryObj<typeof QueryInput>;
-
-const TOKEN_STYLES: Record<QueryTokenKind, CSSProperties> = {
-  filter: { backgroundColor: "var(--vf-color-background-neutral-active)" },
-  operator: {
-    backgroundColor: "var(--vf-color-background-information-default)",
-    fontWeight: 600,
-  },
-  value: { backgroundColor: "var(--vf-color-background-positive-default)" },
-  fuzzy: { color: "var(--vf-color-text-muted)", fontStyle: "italic" },
-  text: {},
-};
-
-// A query as text, with each token kind colored
-const ParsedQuery = ({ label, query }: { label: string; query: string }) => (
-  <div>
-    <p className="u-text--muted">{label}</p>
-    <pre style={{ whiteSpace: "pre-wrap" }}>
-      {query === "" ? (
-        <span className="u-text--muted">(empty)</span>
-      ) : (
-        tokenizeQuery(query).map((token, index) => (
-          <span key={index} style={TOKEN_STYLES[token.kind]}>
-            {token.text}
-          </span>
-        ))
-      )}
-    </pre>
-  </div>
-);
-
-// Lists each filter's source field and the values read from the machines
-const MachineFieldTable = () => (
-  <div>
-    <p className="u-text--muted">Machine fields</p>
-    <table>
-      <thead>
-        <tr>
-          <th>Filter</th>
-          <th>Field</th>
-          <th>Values</th>
-        </tr>
-      </thead>
-      <tbody>
-        {FILTER_FIELDS.map(({ filter, path, read }) => (
-          <tr key={filter}>
-            <td>{filter}</td>
-            <td>
-              <code>{path}</code>
-            </td>
-            <td>{[...new Set(machines.flatMap(read))].join(", ")}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-);
-
-export const Default: Story = {
-  render: (args) => {
-    const [search, setSearch] = useState<string>("");
-    const [context, setContext] = useState<string>("");
-    const [token, setToken] = useState<string>("");
-
-    let suggestions: Suggestion[] = args.suggestions;
-
-    if (context.length === 0) {
-      // Outside any filter, suggest root filter names only
-      suggestions = suggestions.filter(
-        (s) => s.type === "filter" && rootFilterNames.includes(s.value),
-      );
-    } else {
-      // Inside a filter, suggest its values and its sub-filter names. Nested
-      // filters use the innermost name, e.g. vlan in fabric.vlan
-      const innermost = context.split(".").pop() ?? "";
-      const subFilters = subFilterNames(innermost);
-      suggestions = suggestions.filter(
-        (s) =>
-          s.type === innermost ||
-          (s.type === "filter" && subFilters.includes(s.value)),
-      );
-    }
-
-    if (token.length > 0) {
-      suggestions = suggestions.filter((s) =>
-        s.value.toLowerCase().includes(token.toLowerCase()),
-      );
-    }
-
-    return (
-      <div
-        style={{ display: "flex", flexDirection: "column", minHeight: "40rem" }}
-      >
-        <QueryInput
-          search={search}
-          setSearch={setSearch}
-          setContext={setContext}
-          setToken={setToken}
-          suggestions={suggestions}
-          placeholder="Search machines..."
-        />
-        <div
-          style={{
-            marginTop: "auto",
-            display: "flex",
-            flexDirection: "column",
-            gap: "1rem",
-          }}
-        >
-          <ParsedQuery label="Raw query" query={search} />
-          <ParsedQuery
-            label="Valid query"
-            query={toDottedQuery(analyzeQuery(search).completeQuery)}
-          />
-          <MachineFieldTable />
-        </div>
-      </div>
-    );
-  },
-};
-
-export const Disabled: Story = {
-  render: () => {
-    return (
+  return (
+    <div className="query-input-demo">
       <QueryInput
-        disabled
-        placeholder="Search machines..."
-        search={""}
-        setSearch={() => {}}
-        setContext={() => {}}
-        setToken={() => {}}
-        suggestions={[]}
-      />
-    );
-  },
-};
-
-export const Loading: Story = {
-  render: (args) => {
-    const [search, setSearch] = useState<string>("");
-    const [, setContext] = useState<string>("");
-    const [_, setToken] = useState<string>("");
-
-    return (
-      <QueryInput
-        isLoading
-        placeholder="Search machines..."
         search={search}
         setSearch={setSearch}
         setContext={setContext}
         setToken={setToken}
-        suggestions={args.suggestions}
+        fields={demoFields}
+        suggestions={suggestions}
+        placeholder="Search machines..."
+        disabled={disabled}
+        isLoading={isLoading || (Boolean(activeField) && values.isFetching)}
+        suggestionError={
+          activeField && values.isError ? values.error.message : undefined
+        }
+        onRetry={() => {
+          void values.refetch();
+        }}
+        noMatchingValues={
+          Boolean(activeField) &&
+          values.isSuccess &&
+          values.data.suggestions.length === 0
+        }
+        onSubmit={submit}
+        onClear={() => {
+          setApplied(null);
+          setPage(1);
+        }}
       />
-    );
-  },
+
+      <p
+        aria-label="Query details"
+        className="u-text--muted u-no-margin--bottom"
+      >
+        {validation.expression
+          ? "Valid query"
+          : validation.error
+            ? "Invalid or incomplete"
+            : "Empty query"}
+        {" · "}
+        {applied ? "Applied search" : "Normal listing"}
+        {applied && search !== applied.text ? " · Unapplied changes" : ""}
+      </p>
+
+      <section
+        aria-label="Machine results"
+        className="query-input-demo__results"
+        ref={resultsRef}
+      >
+        <div className="query-input-demo__toolbar">
+          <label className="query-input-demo__group">
+            Group machines
+            <select
+              value={group}
+              onChange={(event) => {
+                setGroup(event.target.value as DemoGroup);
+                setPage(1);
+              }}
+            >
+              <option value="none">No grouping</option>
+              <option value="status">Status</option>
+              <option value="pool">Pool</option>
+            </select>
+          </label>
+          <span>
+            {demoMachines.filter((machine) => selected[machine.id]).length}{" "}
+            selected
+          </span>
+          {results.data && (
+            <span aria-live="polite">
+              {results.data.total} matching machines
+            </span>
+          )}
+        </div>
+        {results.isError ? (
+          <div role="alert">
+            <p>{results.error.message}</p>
+            <button
+              type="button"
+              onClick={() => {
+                void results.refetch();
+              }}
+            >
+              Retry results
+            </button>
+          </div>
+        ) : (
+          <>
+            {results.data && results.data.groups.length > 0 && (
+              <p className="u-no-margin--bottom">
+                Groups (full result):{" "}
+                {results.data.groups
+                  .map(({ name, count }) => `${name}: ${count}`)
+                  .join("; ")}
+              </p>
+            )}
+            <GenericTable
+              key={group}
+              aria-label={
+                applied ? "Applied query results" : "Normal machine listing"
+              }
+              columns={machineColumns}
+              data={results.data?.items ?? EMPTY_MACHINES}
+              isLoading={results.isPending}
+              variant="full-height"
+              containerRef={resultsRef}
+              groupBy={group === "none" ? undefined : [group]}
+              showChevron
+              sorting={sorting}
+              setSorting={(update) => {
+                setSorting(update);
+                setPage(1);
+              }}
+              selection={{
+                rowSelection: selected,
+                setRowSelection: setSelected,
+                rowSelectionLabelKey: "hostname",
+              }}
+              pagination={
+                results.data && results.data.total > 0
+                  ? {
+                      currentPage: page,
+                      setCurrentPage: setPage,
+                      itemsPerPage: pageSize,
+                      totalItems: results.data?.total ?? 0,
+                      dataContext: "machines",
+                      isPending: results.isFetching,
+                      pageSizes: [5, 10, 20],
+                      handlePageSizeChange: (size) => {
+                        setPageSize(size);
+                        setPage(1);
+                      },
+                    }
+                  : undefined
+              }
+              noData="No matching machines. Edit the draft and Submit, or Clear to return to the listing."
+            />
+          </>
+        )}
+      </section>
+    </div>
+  );
 };
+
+const QueryDemo = (props: DemoProps) => {
+  const [client] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: { retry: false, refetchOnWindowFocus: false },
+        },
+      }),
+  );
+  useEffect(() => () => client.clear(), [client]);
+  return (
+    <QueryClientProvider client={client}>
+      <DemoHarness {...props} />
+    </QueryClientProvider>
+  );
+};
+
+const meta = {
+  title: "Components/QueryInput",
+  component: QueryDemo,
+  tags: ["autodocs"],
+  parameters: {
+    layout: "padded",
+    docs: {
+      description: {
+        component:
+          "Frontend-only machine fixture. Submit applies the draft; Clear restores the listing. Storybook controls simulate permissions, latency, and failures.",
+      },
+    },
+  },
+  args: {
+    delayMs: 250,
+    failSuggestions: false,
+    failExecution: false,
+    persona: "administrator",
+    disabled: false,
+    isLoading: false,
+  },
+  argTypes: {
+    delayMs: { control: { type: "range", min: 0, max: 3000, step: 100 } },
+    failSuggestions: { control: "boolean" },
+    failExecution: { control: "boolean" },
+    persona: { control: "select", options: ["administrator", "operator"] },
+    disabled: { control: "boolean" },
+    isLoading: { control: "boolean" },
+  },
+} satisfies Meta<typeof QueryDemo>;
+
+export default meta;
+type Story = StoryObj<typeof meta>;
+
+export const Default: Story = {};

@@ -56,10 +56,75 @@
   }
 
   .p-query-input__actions {
+    // Replace the height removed by small, dense buttons without growing the bar.
+    $inset: calc(
+      (
+          map.get($settings-text-default, line-height) - map.get(
+              $settings-text-small,
+              line-height
+            )
+        ) /
+        2 + $sp-unit * 0.5
+    );
+
+    align-items: center;
     display: flex;
     flex-shrink: 0;
     gap: $sph--x-small;
-    padding-right: $sph--large;
+    padding: $inset $inset $inset 0;
+
+    button {
+      --vf-focus-outline-color: #{$colors--theme--focus};
+
+      align-items: center;
+      display: inline-flex;
+      gap: $sph--x-small;
+      margin: 0;
+    }
+  }
+
+  .p-query-input__shortcut {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    line-height: 1;
+    margin: 0;
+    padding: 0;
+
+    .keyboard-key {
+      align-items: center;
+      background: transparent;
+      border-color: currentColor;
+      box-sizing: border-box;
+      color: inherit;
+      display: inline-flex;
+      font-size: 0.75rem;
+      height: map.get($settings-text-small, line-height);
+      line-height: 1;
+      padding-block: 0;
+    }
+  }
+
+  .p-query-input__error {
+    position: relative;
+    color: $color-negative;
+
+    [role="tooltip"] {
+      display: none;
+      position: absolute;
+      right: 0;
+      bottom: 100%;
+      width: 20rem;
+      padding: $sph--small;
+      background: $colors--theme--background-alt;
+      color: $colors--theme--text-default;
+      z-index: 101;
+    }
+
+    &:hover [role="tooltip"],
+    &:focus [role="tooltip"] {
+      display: block;
+    }
   }
 
   .p-query-input__token--fuzzy {
@@ -73,7 +138,7 @@
   // Chips use Vanilla's p-chip pattern; these rules add the editor's kinds
   .p-query-input__chip {
     font-family: unquote($font-monospace);
-    user-select: none;
+    user-select: text;
   }
 
   // An empty closer chip still needs a line box to match the others
@@ -129,13 +194,10 @@
     width: 0;
   }
 
-  // A unit is ringed when the selection touches it or Backspace highlights it.
-  // The wrapper is a flex row, so its box is the chips' full height and width
-  // and the ring follows the same shape as the chips' background
   .p-query-input__unit {
-    display: inline-flex;
-    align-items: center;
-    border-radius: 999px;
+    display: inline;
+    border-radius: 0.25rem;
+    box-decoration-break: clone;
   }
 
   // Text slots inside a unit hold spaces and the caret. The zero-width glyph
@@ -149,16 +211,24 @@
     outline-offset: 2px;
   }
 
-  .p-query-input__list {
+  .p-query-input__suggestions {
     position: absolute;
     background-color: $colors--theme--background-alt;
-    margin: 0;
-    padding: 0;
     top: 100%;
     z-index: 100;
     width: 100%;
     outline: none;
     border: $input-border-thickness solid $colors--theme--border-low-contrast;
+
+    [role="status"],
+    [role="alert"] {
+      padding: $sph--small;
+    }
+  }
+
+  .p-query-input__list {
+    margin: 0;
+    padding: 0;
     list-style: none;
 
     .p-query-input__loading {

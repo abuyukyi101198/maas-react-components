@@ -4,6 +4,7 @@ import {
   stepOverUnit,
   toDottedQuery,
   tokenizeQuery,
+  replaceQueryToken,
 } from "./queryAnalyzer";
 
 const kinds = (input: string) =>
@@ -21,12 +22,50 @@ describe("tokenizeQuery", () => {
     ]);
   });
 
-  it("recognises operator phrases in any case", () => {
+  it("leaves incorrectly capitalized operators editable", () => {
     expect(kinds("memory(at least 1)")).toEqual([
       ["memory", "filter"],
-      ["at least", "operator"],
+      ["at", "value"],
+      ["least", "value"],
       ["1", "value"],
     ]);
+  });
+
+  describe("specification regressions", () => {
+    it.each(["8", "8GiB", "8 GiB", "AT LEAST 8GiB"])(
+      "chains completed quantity %s",
+      (value) => {
+        expect(analyzeQuery(`disk(size(${value} `).operators).toEqual([
+          "AND",
+          "OR",
+        ]);
+        expect(analyzeQuery(`disk(size(${value} A`).operators).toEqual(["AND"]);
+      },
+    );
+
+    it.each([
+      ['status("Rea" OR "New")', 'status("Ready" OR "New")'],
+      ['status("Rea" )', 'status("Ready" )'],
+      ['status("Rea") AND zone("x")', 'status("Ready") AND zone("x")'],
+    ])("preserves surroundings of %s", (query, expected) => {
+      const result = replaceQueryToken(query, analyzeQuery(query, 11), {
+        value: "Ready",
+        type: "status",
+      });
+      expect(result.value).toBe(expected);
+      expect(result.cursor).toBe('status("Ready"'.length);
+    });
+
+    it("inserts numeric suggestions as quantities", () => {
+      const query = "disk(size())";
+      expect(
+        replaceQueryToken(query, analyzeQuery(query, 10), {
+          value: "8GiB",
+          type: "size",
+          kind: "quantity",
+        }).value,
+      ).toBe("disk(size(8GiB))");
+    });
   });
 
   it("does not treat words that merely start with an operator as operators", () => {

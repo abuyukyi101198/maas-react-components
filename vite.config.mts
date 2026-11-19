@@ -79,6 +79,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "jsdom",
+    server: {
+      deps: { inline: ["@canonical/react-ds-global"] },
+    },
     setupFiles: ["./vitest-setup.ts"],
   },
 });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { ComponentProps, useState } from "react";
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -60,10 +60,11 @@ describe("QueryInput", () => {
   const QueryInputTestWrapper = ({
     initialSearch = "",
     suggestions = mockSuggestions,
+    ...props
   }: {
     initialSearch?: string;
     suggestions?: Suggestion[];
-  }) => {
+  } & Partial<ComponentProps<typeof QueryInput>>) => {
     const [search, setSearch] = useState(initialSearch);
     const [context, setContext] = useState("");
     const [token, setToken] = useState("");
@@ -76,6 +77,7 @@ describe("QueryInput", () => {
           setContext={setContext}
           setToken={setToken}
           suggestions={suggestions}
+          {...props}
         />
         <span data-testid="context">{context}</span>
         <span data-testid="token">{token}</span>
@@ -91,21 +93,21 @@ describe("QueryInput", () => {
     render(<QueryInput {...defaultProps} />);
 
     expect(screen.getByTestId("p-query-input")).toBeInTheDocument();
-    expect(screen.getByRole("searchbox")).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
   });
 
   it("shows placeholder text", () => {
     render(<QueryInput {...defaultProps} placeholder="Search items..." />);
 
     expect(
-      screen.getByRole("searchbox", { name: "Search items..." }),
+      screen.getByRole("combobox", { name: "Search items..." }),
     ).toBeInTheDocument();
   });
 
   it("handles disabled state", () => {
     render(<QueryInput {...defaultProps} disabled />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     expect(input).toHaveAttribute("contenteditable", "false");
     expect(input).toHaveAttribute("aria-disabled", "true");
   });
@@ -114,7 +116,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, "test query");
 
     expect(input.textContent).toBe("test query");
@@ -123,7 +125,7 @@ describe("QueryInput", () => {
   it("displays current search value", () => {
     render(<QueryInput {...defaultProps} search="current search" />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     expect(input.textContent).toBe("current search");
   });
 
@@ -131,10 +133,10 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
-    expect(screen.getByRole("searchbox")).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
     expect(screen.getByText("active")).toBeInTheDocument();
     expect(screen.getByText("inactive")).toBeInTheDocument();
   });
@@ -143,22 +145,27 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} suggestions={[]} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     expect(
       screen.getAllByRole("option").map((option) => option.textContent),
-    ).toEqual(["NOToperator"]);
+    ).toEqual([
+      "NOToperator",
+      "CONTAINSoperator",
+      "STARTS WITHoperator",
+      "ENDS WITHoperator",
+    ]);
   });
 
   it("shows loading spinner when isLoading=true", async () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} isLoading />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
-    expect(screen.getByText("Loading...")).toBeInTheDocument();
+    expect(screen.getByText("Loading values...")).toBeInTheDocument();
   });
 
   it("limits suggestions to 4 by default", async () => {
@@ -173,7 +180,7 @@ describe("QueryInput", () => {
 
     render(<QueryInput {...defaultProps} suggestions={manySuggestions} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     const options = screen.getAllByRole("option");
@@ -190,7 +197,7 @@ describe("QueryInput", () => {
 
     render(<QueryInput {...defaultProps} suggestions={manySuggestions} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     expect(screen.getByText("Show more...")).toBeInTheDocument();
@@ -208,15 +215,14 @@ describe("QueryInput", () => {
 
     render(<QueryInput {...defaultProps} suggestions={manySuggestions} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     const showMoreButton = screen.getByText("Show more...");
     await user.click(showMoreButton);
 
     const options = screen.getAllByRole("option");
-    // All 10 items plus the NOT operator, no more "Show more..."
-    expect(options).toHaveLength(11);
+    expect(options).toHaveLength(14);
     expect(screen.queryByText("Show more...")).not.toBeInTheDocument();
   });
 
@@ -224,7 +230,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     const suggestion = screen.getByText("active");
@@ -237,7 +243,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
     await user.keyboard("{ArrowDown}");
     await user.keyboard("{Enter}");
@@ -249,7 +255,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     const suggestion = screen.getAllByRole("option")[1];
@@ -267,7 +273,7 @@ describe("QueryInput", () => {
       </div>,
     );
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     expect(screen.getByRole("listbox")).toBeInTheDocument();
@@ -286,10 +292,10 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
-    expect(screen.getByRole("searchbox")).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
 
@@ -300,7 +306,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     // First item should be highlighted by default on focus
@@ -330,7 +336,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     // Move up from first item should wrap to last
@@ -351,7 +357,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
     await user.keyboard("{ArrowDown}"); // Move to second item
     await user.keyboard("{Enter}");
@@ -363,7 +369,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     expect(screen.getByRole("listbox")).toBeInTheDocument();
@@ -374,12 +380,12 @@ describe("QueryInput", () => {
   it("does not open suggestions when disabled", async () => {
     const user = userEvent.setup();
     const { unmount } = render(<QueryInput {...defaultProps} />);
-    await user.click(screen.getByRole("searchbox"));
+    await user.click(screen.getByRole("combobox"));
     expect(screen.getByRole("listbox")).toBeInTheDocument();
     unmount();
 
     render(<QueryInput {...defaultProps} disabled />);
-    await user.click(screen.getByRole("searchbox"));
+    await user.click(screen.getByRole("combobox"));
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
@@ -387,7 +393,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, "status(");
 
     expect(screen.getByTestId("context")).toHaveTextContent("status");
@@ -397,7 +403,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, "test");
 
     expect(screen.getByTestId("token")).toHaveTextContent("test");
@@ -407,7 +413,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("john');
 
     expect(screen.getByTestId("context")).toHaveTextContent("status");
@@ -418,7 +424,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'machine(zone("de');
 
     expect(screen.getByTestId("context")).toHaveTextContent("machine.zone");
@@ -429,7 +435,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") AND zone("de');
 
     expect(screen.getByTestId("context")).toHaveTextContent("zone");
@@ -440,7 +446,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") ');
 
     expect(screen.getByTestId("context")).toBeEmptyDOMElement();
@@ -450,7 +456,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     await user.click(screen.getByText("Show more..."));
@@ -468,7 +474,7 @@ describe("QueryInput", () => {
       />,
     );
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("deployed") AND ');
     await user.click(screen.getByRole("option", { name: /zone/ }));
 
@@ -481,7 +487,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, "status(");
     await user.click(screen.getByText("active"));
 
@@ -493,7 +499,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("ac');
     await user.click(screen.getByText("active"));
 
@@ -504,7 +510,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
     await user.click(screen.getByText("active"));
 
@@ -521,7 +527,7 @@ describe("QueryInput", () => {
       />,
     );
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") AND def');
     await user.click(screen.getByRole("option", { name: /^default/ }));
 
@@ -536,7 +542,7 @@ describe("QueryInput", () => {
       />,
     );
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, '"de');
     await user.click(screen.getByRole("option", { name: /^default/ }));
 
@@ -549,7 +555,7 @@ describe("QueryInput", () => {
       <QueryInputTestWrapper suggestions={[{ value: 'a"b', type: "tag" }]} />,
     );
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, "tag(");
     await user.click(screen.getByRole("option", { name: /a"b/ }));
 
@@ -561,7 +567,7 @@ describe("QueryInput", () => {
     const initialSearch = 'status("de") AND zone("x")';
     render(<QueryInputTestWrapper initialSearch={initialSearch} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
     const cursor = 'status("de'.length;
     placeCaret(input, cursor);
@@ -579,7 +585,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper initialSearch='status("ac")' />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
     placeCaret(input, 'status("ac'.length);
     fireEvent.keyUp(input, { key: "ArrowLeft" });
@@ -592,7 +598,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("active")');
 
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
@@ -602,7 +608,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") OR zone("x")');
 
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
@@ -612,7 +618,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") OR');
 
     expect(screen.getByTestId("token")).toBeEmptyDOMElement();
@@ -622,7 +628,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
     expect(screen.queryByRole("option", { name: /^OR/ })).toBeNull();
     expect(screen.queryByRole("option", { name: /^AND/ })).toBeNull();
@@ -636,7 +642,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper initialSearch='status("a")' />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
     placeCaret(input, input.textContent?.length ?? 0);
     await user.keyboard(" ");
@@ -652,7 +658,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, "NOT ");
     expect(screen.queryByRole("option", { name: /^NOT/ })).toBeNull();
     expect(screen.getByRole("option", { name: /^active/ })).toBeInTheDocument();
@@ -665,7 +671,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, "status(NOT ");
     await user.click(screen.getByText("Show more..."));
 
@@ -683,7 +689,7 @@ describe("QueryInput", () => {
       />,
     );
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") A');
     await user.click(screen.getByRole("option", { name: /^AND/ }));
     await user.click(screen.getByRole("option", { name: /^zone/ }));
@@ -696,7 +702,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") OR ');
     await user.click(screen.getByText("Show more..."));
 
@@ -708,7 +714,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, "status(");
     await user.click(screen.getByText("Show more..."));
 
@@ -738,7 +744,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a" ');
 
     const options = screen.getAllByRole("option");
@@ -752,7 +758,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") o');
 
     expect(screen.getByRole("option", { name: /^OR/ })).toBeInTheDocument();
@@ -764,7 +770,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, "memory(AT L");
 
     expect(
@@ -780,7 +786,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, "not");
 
     // Only the operator is offered; a term would be glued onto the word
@@ -796,7 +802,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") or');
     await user.click(screen.getByRole("option", { name: /^OR/ }));
 
@@ -807,7 +813,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") OR');
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
 
@@ -820,7 +826,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") O');
     await user.click(screen.getByRole("option", { name: /^OR/ }));
 
@@ -838,7 +844,7 @@ describe("QueryInput", () => {
       />,
     );
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     // Move cursor to different position
@@ -854,10 +860,10 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} isLoading />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
-    expect(screen.getByText("Loading...")).toBeInTheDocument();
+    expect(screen.getByText("Loading values...")).toBeInTheDocument();
   });
 
   it("handles disabled suggestions", async () => {
@@ -868,21 +874,20 @@ describe("QueryInput", () => {
 
     render(<QueryInput {...defaultProps} suggestions={disabledSuggestions} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     const suggestion = screen.getByText("disabled");
     await user.click(suggestion);
 
-    // Should still work even with disabled flag (component doesn't prevent selection)
-    expect(mockSetSearch).toHaveBeenCalled();
+    expect(mockSetSearch).not.toHaveBeenCalled();
   });
 
   it("sets correct aria-expanded state", async () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     expect(input).toHaveAttribute("aria-expanded", "false");
 
     await user.click(input);
@@ -892,22 +897,22 @@ describe("QueryInput", () => {
   it("sets aria-haspopup='listbox'", () => {
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     expect(input).toHaveAttribute("aria-haspopup", "listbox");
   });
 
-  it("sets aria-owns pointing to suggestions", () => {
+  it("sets aria-controls pointing to its own suggestions", () => {
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
-    expect(input).toHaveAttribute("aria-owns", "query-suggestions");
+    const input = screen.getByRole("combobox");
+    expect(input).toHaveAttribute("aria-controls", `${input.id}-suggestions`);
   });
 
   it("sets proper role attributes", async () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
 
     const listbox = screen.getByRole("listbox");
@@ -921,7 +926,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
 
     // Type rapidly
     await user.type(input, 'status("active") AND created("test")');
@@ -937,22 +942,30 @@ describe("QueryInput", () => {
     render(
       <QueryInput
         {...defaultProps}
-        search="existing text"
+        search={'status("Ready")'}
         onSubmit={onSubmit}
       />,
     );
 
-    await user.click(screen.getByRole("searchbox"));
+    await user.click(screen.getByRole("combobox"));
     await user.keyboard("{Control>}{Enter}{/Control}");
 
-    expect(onSubmit).toHaveBeenCalledWith("existing text");
+    expect(onSubmit).toHaveBeenCalledWith('status("Ready")', {
+      type: "filter",
+      name: "status",
+      expression: {
+        type: "comparison",
+        operator: "equal",
+        value: { type: "literal", value: "Ready" },
+      },
+    });
   });
 
   it("clears the query on Escape once suggestions are closed", async () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} search="existing text" />);
 
-    await user.click(screen.getByRole("searchbox"));
+    await user.click(screen.getByRole("combobox"));
     await user.keyboard("{Escape}");
     expect(mockSetSearch).not.toHaveBeenCalledWith("");
 
@@ -964,7 +977,7 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInput {...defaultProps} />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, "test query");
 
     // Move cursor to middle
@@ -981,17 +994,17 @@ describe("QueryInput", () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") or "free');
 
-    expect(input.textContent).toBe('status("a") or "free');
+    expect(input.textContent).toBe('status("a") or "free"');
   });
 
   it("renders filter and operator chips, with fuzzy text unchanged", async () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.type(input, 'status("a") AND "free');
 
     expect(
@@ -1015,14 +1028,14 @@ describe("QueryInput", () => {
     ]);
     expect(
       input.querySelector(".p-query-input__token--fuzzy")?.textContent,
-    ).toBe('"free');
+    ).toBe('"free"');
   });
 
   it("highlights a filter on Backspace, then removes the whole filter", async () => {
     const user = userEvent.setup();
     render(<QueryInputTestWrapper initialSearch='status("a") AND x' />);
 
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     await user.click(input);
     placeCaret(input, 'status("'.length - 1);
     await user.keyboard("{Backspace}");
@@ -1039,7 +1052,7 @@ describe("QueryInput", () => {
 
   it("moves the caret out of a chip instead of throwing", () => {
     render(<QueryInput {...defaultProps} search={'x status("a")'} />);
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     const chipText = input.querySelector(
       ".p-query-input__chip--filter .p-chip__value",
     )!.firstChild!;
@@ -1060,7 +1073,7 @@ describe("QueryInput", () => {
       );
     };
     render(<Controlled />);
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     input.focus();
 
     // The browser types the "(" into the caret's text node, then fires input
@@ -1080,7 +1093,7 @@ describe("QueryInput", () => {
       );
     };
     render(<Controlled />);
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     input.focus();
 
     const leading = input.querySelector(
@@ -1105,7 +1118,7 @@ describe("QueryInput", () => {
       );
     };
     render(<Controlled />);
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     input.focus();
 
     // Backspace clears the space node; the caret then sits after the "x"
@@ -1131,7 +1144,7 @@ describe("QueryInput", () => {
       );
     };
     render(<Controlled />);
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     input.focus();
 
     const text = input.lastChild as Text;
@@ -1150,7 +1163,7 @@ describe("QueryInput", () => {
       );
     };
     render(<Controlled />);
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     input.focus();
 
     // The browser types ")" after the "(" and before the existing ")"
@@ -1168,7 +1181,7 @@ describe("QueryInput", () => {
 
   it("rings every unit the selection touches, and clears when collapsed", () => {
     render(<QueryInput {...defaultProps} search={'status("a") AND x'} />);
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
 
     document.getSelection()!.selectAllChildren(input);
     document.dispatchEvent(new Event("selectionchange"));
@@ -1185,12 +1198,268 @@ describe("QueryInput", () => {
 
   it("nests an inner filter's ring inside the filter that contains it", () => {
     render(<QueryInput {...defaultProps} search={'machine(zone("de"))'} />);
-    const input = screen.getByRole("searchbox");
+    const input = screen.getByRole("combobox");
     const units = input.querySelectorAll(".p-query-input__unit");
 
     expect(units).toHaveLength(2);
     expect(units[1].parentElement!.closest(".p-query-input__unit")).toBe(
       units[0],
     );
+  });
+
+  it.each([
+    "",
+    "   ",
+    'status("Ready") AND',
+    'STATUS("Ready")',
+    'fabric(vlan(name("x")))',
+  ])("does not submit invalid or empty draft %j", async (search) => {
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <QueryInput {...defaultProps} search={search} onSubmit={onSubmit} />,
+    );
+    expect(screen.getByRole("button", { name: /Submit/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.click(screen.getByRole("button", { name: /Submit/ }));
+    await user.click(screen.getByRole("combobox"));
+    await user.keyboard("{Control>}{Enter}{/Control}{Meta>}{Enter}{/Meta}");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("keeps local suggestions during loading and failure and supports Retry", async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    const { rerender } = render(<QueryInput {...defaultProps} isLoading />);
+    await user.click(screen.getByRole("combobox"));
+    expect(
+      screen.getByRole("option", { name: "status filter" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("active")).not.toBeInTheDocument();
+    rerender(
+      <QueryInput
+        {...defaultProps}
+        suggestionError="Lookup failed"
+        onRetry={onRetry}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Lookup failed");
+    expect(
+      screen.getByRole("option", { name: "status filter" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a successful empty lookup alongside local operators", async () => {
+    const user = userEvent.setup();
+    render(<QueryInput {...defaultProps} noMatchingValues suggestions={[]} />);
+    await user.click(screen.getByRole("combobox"));
+    expect(screen.getByRole("status")).toHaveTextContent("No matching values");
+    expect(
+      screen.getByRole("option", { name: "NOT operator" }),
+    ).toBeInTheDocument();
+  });
+
+  it("pairs quotes and skips their closer", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper initialSearch="status()" />);
+    const input = screen.getByRole("combobox");
+    input.focus();
+    placeCaret(input, 7);
+    await user.keyboard('"Ready"');
+    expect(input.textContent).toBe('status("Ready")');
+  });
+
+  it("undoes and redoes suggestion insertion and restores only the draft after Clear", async () => {
+    const user = userEvent.setup();
+    const onClear = vi.fn();
+    const onSubmit = vi.fn();
+    render(
+      <QueryInputTestWrapper
+        initialSearch='status("Ready")'
+        onClear={onClear}
+        onSubmit={onSubmit}
+      />,
+    );
+    const input = screen.getByRole("combobox");
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(onClear).toHaveBeenCalledTimes(1);
+    expect(input).toHaveTextContent("");
+    await user.keyboard("{Control>}z{/Control}");
+    expect(input.textContent).toBe('status("Ready")');
+    expect(onSubmit).not.toHaveBeenCalled();
+    await user.keyboard("{Control>}{Shift>}z{/Shift}{/Control}");
+    expect(input.textContent).toBe("");
+    await user.click(input);
+    await user.click(screen.getByRole("option", { name: "status filter" }));
+    expect(input.textContent).toBe("status()");
+    await user.keyboard("{Control>}z{/Control}");
+    expect(input.textContent).toBe("");
+    await user.keyboard("{Control>}y{/Control}");
+    expect(input.textContent).toBe("status()");
+  });
+
+  it("copies filter boundaries as DSL and pastes without submitting", () => {
+    const onSubmit = vi.fn();
+    render(
+      <QueryInputTestWrapper
+        initialSearch='fabric(vlan("x"))'
+        onSubmit={onSubmit}
+      />,
+    );
+    const input = screen.getByRole("combobox");
+    input.focus();
+    document.getSelection()!.selectAllChildren(input);
+    const setData = vi.fn();
+    fireEvent.copy(input, { clipboardData: { setData } });
+    expect(setData).toHaveBeenCalledWith("text/plain", 'fabric(vlan("x"))');
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => 'status("Ready")\nAND zone("default")' },
+    });
+    expect(input.textContent).toBe('status("Ready") AND zone("default")');
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "z", ctrlKey: true });
+    expect(input.textContent).toBe('fabric(vlan("x"))');
+  });
+
+  it("limits operators by field type and exposes accessible validation feedback", async () => {
+    const user = userEvent.setup();
+    const fields = [{ name: "status", type: "string" }] as const;
+    render(
+      <QueryInputTestWrapper
+        initialSearch="status()"
+        fields={fields}
+        suggestions={[]}
+      />,
+    );
+    const input = screen.getByRole("combobox");
+    input.focus();
+    placeCaret(input, 7);
+    fireEvent.keyUp(input, { key: "ArrowLeft" });
+    expect(
+      screen.queryByRole("option", { name: /ABOVE/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "CONTAINS operator" }),
+    ).toBeInTheDocument();
+    const indicator = screen.getByRole("button", { name: /^Query error:/ });
+    expect(indicator).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(
+      screen.queryByRole("button", { name: /^Query error:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("supports native undo events for structural edits", async () => {
+    const user = userEvent.setup();
+    render(<QueryInputTestWrapper />);
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    await user.click(screen.getByRole("option", { name: "status filter" }));
+    fireEvent(
+      input,
+      new InputEvent("beforeinput", {
+        inputType: "historyUndo",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(input.textContent).toBe("");
+    fireEvent(
+      input,
+      new InputEvent("beforeinput", {
+        inputType: "historyRedo",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(input.textContent).toBe("status()");
+  });
+
+  it("keeps quoted escapes and invalid pasted identifiers editable", () => {
+    render(<QueryInputTestWrapper />);
+    const input = screen.getByRole("combobox");
+    input.focus();
+    document.getSelection()!.selectAllChildren(input);
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => 'STATUS("a\\"b")' },
+    });
+    expect(input.querySelectorAll("[data-chip]")).toHaveLength(0);
+    expect(input.textContent).toBe('STATUS("a\\"b")');
+    expect(screen.getByRole("button", { name: /Submit/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("uses compact positive and ghost-style action buttons with shortcut hints", () => {
+    render(<QueryInput {...defaultProps} search='status("Ready")' />);
+    expect(screen.getByRole("button", { name: "Submit" })).toHaveClass(
+      "p-button--positive",
+      "is-small",
+      "is-dense",
+    );
+    expect(screen.getByRole("button", { name: "Clear" })).toHaveClass(
+      "p-button--base",
+      "is-small",
+      "is-dense",
+    );
+    expect(screen.getByRole("button", { name: "Submit" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    const submit = screen.getByRole("button", { name: "Submit" });
+    const clear = screen.getByRole("button", { name: "Clear" });
+    expect(submit).toHaveAttribute(
+      "aria-keyshortcuts",
+      "Control+Enter Meta+Enter",
+    );
+    expect(submit.querySelector(".keyboard-keys")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    expect(submit.querySelectorAll(".keyboard-key")).toHaveLength(2);
+    expect(clear.querySelector(".keyboard-key")).toHaveTextContent("Esc");
+    expect(clear).toHaveAttribute("aria-keyshortcuts", "Escape");
+  });
+
+  it.each([
+    ["MacIntel", "Cmd"],
+    ["Linux x86_64", "Ctrl"],
+  ])("shows the submission modifier for %s", (platform, expected) => {
+    const platformMock = vi
+      .spyOn(navigator, "platform", "get")
+      .mockReturnValue(platform);
+    try {
+      render(<QueryInput {...defaultProps} />);
+      expect(
+        screen
+          .getByRole("button", { name: "Submit" })
+          .querySelector(".keyboard-key"),
+      ).toHaveTextContent(expected);
+    } finally {
+      platformMock.mockRestore();
+    }
+  });
+
+  it("does not clear through the disabled library button", async () => {
+    const user = userEvent.setup();
+    const onClear = vi.fn();
+    render(
+      <QueryInput
+        {...defaultProps}
+        search='status("Ready")'
+        disabled
+        onClear={onClear}
+      />,
+    );
+    const clear = screen.getByRole("button", { name: "Clear" });
+    expect(clear).toHaveAttribute("aria-disabled", "true");
+    await user.click(clear);
+    expect(onClear).not.toHaveBeenCalled();
+    expect(mockSetSearch).not.toHaveBeenCalled();
   });
 });
